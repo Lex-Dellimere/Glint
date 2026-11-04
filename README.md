@@ -116,6 +116,19 @@ mbuild gen           # remake the bindings from registry/gl.xml
 
 The tests need Xvfb for the window parts. Headless tests run on any GPU or on Mesa's software renderer.
 
+## Regenerating the bindings
+
+`src/glint_gl.mettle` and `src/glint_ext.mettle` are generated; don't edit them by hand.
+To update them to a newer registry:
+
+```bash
+curl -fsSL -o registry/gl.xml https://raw.githubusercontent.com/KhronosGroup/OpenGL-Registry/main/xml/gl.xml
+mbuild gen           # runs tools/glgen.py (Python 3, standard library only)
+mbuild test
+```
+
+To change what is generated (types, which extensions), edit `tools/glgen.py`.
+
 ## License
 
-Apache-2.0. `registry/gl.xml` is Copyright The Khronos Group Inc., Apache-2.0.
+Apache-2.0 (see LICENSE). `registry/gl.xml` is Copyright The Khronos Group Inc., Apache-2.0; see NOTICE.

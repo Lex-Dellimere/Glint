@@ -7,7 +7,7 @@ fn project() {
   mb_meta("license", "Apache-2.0");
   mb_import_root("src");
   // gl.xml (2.7 MB) and the generator stay in the repo, not in the package.
-  mb_publish_include("src/, examples/, docs/, templates/, README.md, LICENSE, AGENT.rules, init.rules");
+  mb_publish_include("src/, examples/, docs/, templates/, README.md, LICENSE, NOTICE, AGENT.rules, init.rules");
   // LearnOpenGL ports. Each runs in a window, or with --headless FILE.ppm
   // draws one frame off-screen and saves it.
   mb_bin("triangle", "examples/triangle/main.mettle");

@@ -1,0 +1,10 @@
+Glint
+Copyright 2026 Lex Dellimere. Licensed under the Apache License 2.0 (see LICENSE).
+
+This project includes registry/gl.xml, the OpenGL API Registry from
+https://github.com/KhronosGroup/OpenGL-Registry
+Copyright 2013-2026 The Khronos Group Inc.
+SPDX-License-Identifier: Apache-2.0
+
+src/glint_gl.mettle and src/glint_ext.mettle are generated from that file
+by tools/glgen.py.
