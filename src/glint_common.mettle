@@ -6,7 +6,7 @@ import "glint_types";
 import "glint_gl";
 import "glint_ext";
 
-var g_err: uint8[1024];
+var g_err: uint8[4096];
 var g_err_len: int64 = 0;
 
 // Why the last Glint call failed, as a NUL-terminated string ("" if none).
@@ -18,7 +18,7 @@ export fn glint_error() -> cstring {
 // Set the error text (used by the platform files). The text is copied.
 export fn glint_internal_fail(msg: string) {
   var n: int64 = (int64)msg.length;
-  if (n > 1023) { n = 1023; }
+  if (n > 4095) { n = 4095; }
   for i in 0..n { g_err[i] = (uint8)msg[i]; }
   g_err_len = n;
   g_err[n] = 0;
@@ -28,7 +28,7 @@ export fn glint_internal_fail(msg: string) {
 export fn glint_internal_fail_more(c: cstring) {
   if (c == 0) { return; }
   var i: int64 = 0;
-  while (c[i] != 0 && g_err_len < 1023) { g_err[g_err_len] = c[i]; g_err_len += 1; i += 1; }
+  while (c[i] != 0 && g_err_len < 4095) { g_err[g_err_len] = c[i]; g_err_len += 1; i += 1; }
   g_err[g_err_len] = 0;
 }
 
@@ -268,64 +268,6 @@ export fn glint_write_ppm(path: cstring, w: int32, h: int32, rgba: uint8*) -> bo
   free((rawptr)rgb);
   fclose(f);
   return true;
-}
-
-// ---- shaders ----
-
-// Compile one shader. Returns 0 on failure; glint_error() then holds the log.
-export fn glint_shader(kind: uint32, src: string) -> uint32 {
-  var s: uint32 = glCreateShader(kind);
-  var srcs: cstring[1];
-  var lens: int32[1];
-  srcs[0] = (cstring)src.chars;
-  lens[0] = (int32)src.length;
-  glShaderSource(s, 1, &srcs[0], &lens[0]);
-  glCompileShader(s);
-  var ok: int32 = 0;
-  glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
-  if (ok == 0) {
-    var log: uint8[2048];
-    var n: int32 = 0;
-    glGetShaderInfoLog(s, 2047, &n, &log[0]);
-    log[n] = 0;
-    glint_internal_fail("shader did not compile: ");
-    glint_internal_fail_more((cstring)&log[0]);
-    glDeleteShader(s);
-    return 0;
-  }
-  return s;
-}
-
-// Compile and link a vertex + fragment program. Returns 0 on failure (see glint_error).
-export fn glint_program(vs_src: string, fs_src: string) -> uint32 {
-  var vs: uint32 = glint_shader(GL_VERTEX_SHADER, vs_src);
-  if (vs == 0) { return 0; }
-  var fs: uint32 = glint_shader(GL_FRAGMENT_SHADER, fs_src);
-  if (fs == 0) { glDeleteShader(vs); return 0; }
-  var p: uint32 = glCreateProgram();
-  glAttachShader(p, vs);
-  glAttachShader(p, fs);
-  glLinkProgram(p);
-  glDeleteShader(vs);
-  glDeleteShader(fs);
-  var ok: int32 = 0;
-  glGetProgramiv(p, GL_LINK_STATUS, &ok);
-  if (ok == 0) {
-    var log: uint8[2048];
-    var n: int32 = 0;
-    glGetProgramInfoLog(p, 2047, &n, &log[0]);
-    log[n] = 0;
-    glint_internal_fail("program did not link: ");
-    glint_internal_fail_more((cstring)&log[0]);
-    glDeleteProgram(p);
-    return 0;
-  }
-  return p;
-}
-
-// Look up a uniform by name (a string literal works).
-export fn glint_uniform(prog: uint32, name: cstring) -> int32 {
-  return glGetUniformLocation(prog, name);
 }
 
 // Print GL debug messages to stderr. Use with a debug context:

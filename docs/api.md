@@ -66,9 +66,6 @@ If `glint_open_existing` fails it returns 0 and never ends your program: on X11,
 
 | Function | What it does |
 |----------|--------------|
-| `glint_shader(kind: uint32, src: string) -> uint32` | Compiles one shader. 0 on failure, with the log in `glint_error()`. |
-| `glint_program(vs: string, fs: string) -> uint32` | Compiles and links a vertex and fragment shader. 0 on failure. |
-| `glint_uniform(prog, name: cstring) -> int32` | `glGetUniformLocation`. |
 | `glint_enable_debug_output() -> bool` | Prints driver debug messages to stderr. Use with `cfg.debug = true`. |
 | `glint_read_rect(ctx, x, y, w, h, format, out: uint8*, stride: int32)` | Reads a rectangle, top row first, (x, y) from the top-left. `format` is `GLINT_FORMAT_RGBA` or `GLINT_FORMAT_BGRA`. `stride` is the bytes between rows of `out` (0 = w * 4, else a multiple of 4), so a tile can go straight into a bigger image. |
 | `glint_read_rgba(ctx, out: uint8*)` | Reads the whole drawable as RGBA8, top row first. `out` holds width * height * 4 bytes. |
@@ -76,6 +73,70 @@ If `glint_open_existing` fails it returns 0 and never ends your program: on X11,
 | `glint_write_ppm(path: cstring, w, h, rgba: uint8*) -> bool` | Saves RGBA pixels as a PPM image. |
 
 In Mettle strings, `{` starts an interpolation, so write `{{` for a literal brace in GLSL: `"void main() {{ ... }"`.
+
+## Shaders
+
+**One shot.** These compile and link straight away and return a GL name, or 0 with a readable log in `glint_error()`.
+
+| Function | What it does |
+|----------|--------------|
+| `glint_shader(kind, src: string) -> uint32` | Compiles one shader from a string. |
+| `glint_shader_file(kind, path: string) -> uint32` | Compiles one shader from a file. |
+| `glint_shader_spirv(kind, data: uint8*, len: int64, entry: cstring) -> uint32` | A SPIR-V shader: `glShaderBinary` then `glSpecializeShader`. Needs GL 4.6 or `GL_ARB_gl_spirv`. |
+| `glint_shader_spirv_file(kind, path: string, entry: cstring) -> uint32` | The same from a `.spv` file. |
+| `glint_link(shaders: uint32*, n, separable: bool) -> uint32` | Links compiled shaders (and deletes them). |
+| `glint_program(vs: string, fs: string) -> uint32` | Vertex + fragment program from strings. |
+| `glint_program_files(vs_path: string, fs_path: string) -> uint32` | The same from files. |
+| `glint_read_file(path: cstring, &len: int64) -> uint8*` | A whole file, NUL-terminated; free it with `free`. 0 if it can't be read. |
+
+**#include.** Shader text may have lines like `#include "lights.glsl"` (or `<lights.glsl>`). The path is relative to the file that includes it; for string sources, relative to the current folder. Includes can nest 16 deep. `#version` must stay in the top file.
+
+**Errors.** Compile errors name the file and line, also inside included files: `inc/bad.glsl:3: error: 'undefined_thing' undeclared`. Glint rewrites the driver's `0:12(5)` (Mesa) and `0(12)` (NVIDIA) prefixes using `#line`. Link errors come as the driver gives them, after `program did not link:`.
+
+**Programs that know their sources.** A `GlintProgram` remembers its stages, so it can rebuild itself, and caches uniform locations.
+
+```mettle
+var p: GlintProgram* = glint_program_new();
+glint_program_add_file(p, GL_VERTEX_SHADER, "shaders/cube.vert");
+glint_program_add_file(p, GL_FRAGMENT_SHADER, "shaders/cube.frag");
+if (!glint_program_build(p)) { print_cstr(glint_error()); }
+// each frame:
+if (glint_program_reload(p) == -1) { print_cstr(glint_error()); }   // old program stays in use
+glint_set_mat4(p, "model", &model.m[0]);
+glint_program_use(p);
+```
+
+| Function | What it does |
+|----------|--------------|
+| `glint_program_new() -> GlintProgram*` | An empty program. |
+| `glint_program_add_file(p, kind, path)` | A stage from a file. |
+| `glint_program_add_source(p, kind, src)` | A stage from a string (copied). |
+| `glint_program_add_spirv(p, kind, path, entry)` | A stage from a SPIR-V file. |
+| `p->separable = true` | Before building: make it usable in a program pipeline. |
+| `glint_program_build(p) -> bool` | Compiles and links all stages. On failure the old program is kept. |
+| `glint_program_reload(p) -> int32` | Rebuilds if any file it read changed, includes too: 1 rebuilt, 0 no change, -1 failed (old one kept). Cheap enough for every frame. |
+| `glint_program_use(p)` | `glUseProgram(p->id)`. |
+| `glint_program_free(p)` | Deletes the program and frees `p`. |
+
+`p->id` is the GL program (0 until a build works) and `p->version` goes up on every successful build.
+
+**Uniforms.** `glint_loc(p, name) -> int32` looks a location up once and caches it (-1 if the uniform is not active: the compiler drops unused ones). The setters return false when the uniform isn't there. With GL 4.1 or newer they use `glProgramUniform*`, so the program doesn't need to be current; before that they make it current.
+
+`glint_set_int`, `glint_set_float`, `glint_set_vec2(p, name, x, y)`, `glint_set_vec3`, `glint_set_vec4`, `glint_set_mat3(p, name, m: float32*)` (9 floats), `glint_set_mat4(p, name, m: float32*)` (16 floats, e.g. `&mat.m[0]`), `glint_set_sampler(p, name, unit)`.
+
+`glint_uniform(prog, name: cstring)` is plain `glGetUniformLocation` for programs made without `GlintProgram`.
+
+**What a program uses.** These take any GL program id.
+
+| Function | What it does |
+|----------|--------------|
+| `glint_uniform_count(prog)`, `glint_attrib_count(prog)` | How many active uniforms / vertex attributes. |
+| `glint_uniform_info(prog, i, name: uint8*, cap, &type: uint32, &size: int32) -> int32` | Name, GL type and array size of uniform i; returns its location. |
+| `glint_attrib_info(prog, i, name, cap, &type, &size) -> int32` | The same for attribute i. |
+| `glint_glsl_type(type) -> string` | `"vec3"`, `"mat4"`, `"sampler2D"` ... |
+| `glint_program_print(prog)` | Prints every active attribute and uniform. |
+
+**Program pipelines (GL 4.1).** Build programs with `separable = true`, then `glint_pipeline(vs_prog, fs_prog) -> uint32` puts them in a pipeline. Draw with `glUseProgram(0); glBindProgramPipeline(pp);`. `glint_pipeline_check(pp) -> bool` validates it (log in `glint_error()`). For other stages call `glUseProgramStages` yourself.
 
 ## The GL functions
 

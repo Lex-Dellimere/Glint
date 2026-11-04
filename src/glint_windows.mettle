@@ -43,6 +43,16 @@ extern fn glint_w32_SetPixelFormat(hdc: int64, fmt: int32, pfd: uint8*) -> int32
 extern fn glint_w32_GetPixelFormat(hdc: int64) -> int32 = "GetPixelFormat";
 extern fn glint_w32_DescribePixelFormat(hdc: int64, fmt: int32, n: uint32, pfd: uint8*) -> int32 = "DescribePixelFormat";
 extern fn glint_w32_SwapBuffers(hdc: int64) -> int32 = "SwapBuffers";
+extern fn glint_w32_GetFileAttributesExA(path: cstring, level: int32, out: uint8*) -> int32 = "GetFileAttributesExA";
+
+// A file's last write time (100 ns units), 0 if it can't be read.
+export fn glint_internal_mtime(path: cstring) -> int64 {
+  var d: uint8[40];
+  if (glint_w32_GetFileAttributesExA(path, 0, &d[0]) == 0) { return 0; }
+  var lo: uint32 = *(uint32*)(&d[0] + 20);
+  var hi: uint32 = *(uint32*)(&d[0] + 24);
+  return ((int64)hi << 32) | (int64)lo;
+}
 
 struct GlintWgl {
   CreateContext: fn(int64) -> int64;

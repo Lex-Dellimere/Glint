@@ -6,7 +6,8 @@ Glint is OpenGL 4.6 for [Mettle](https://github.com/The-Mettle-Project/Mettle). 
 - **the ARB, KHR and EXT extensions** (308 extensions, 889 more functions), with `glint_has_ext` to check for one;
 - **a context** on Glint's own window, on a window your program already has (an X11 window id or an HWND), or **headless** with no window at all, with pixel readback;
 - **Linux** through EGL, with GLX as the fallback, and **Windows** through WGL;
-- small helpers: shader compile and link with error logs, debug output, PPM saving, and a little vector and matrix math (`glint_math`).
+- shaders from strings or files with `#include`, errors that name the file and line, programs that rebuild when you save their files, cached uniforms and setters, SPIR-V, and program pipelines;
+- small helpers: debug output, pixel readback, PPM saving, and a little vector and matrix math (`glint_math`).
 
 It is a plain library, not an engine: use it for a game engine, a GUI renderer, a tool, or tests.
 The system GL libraries are loaded when your program runs (`dlopen` / `LoadLibraryA`), so nothing links against libGL and a machine without GL gets a clear error instead of a failed start.
@@ -97,7 +98,7 @@ Ports of [LearnOpenGL](https://learnopengl.com) chapters, in `examples/`:
 | `triangle` | Hello Triangle |
 | `textures` | Textures (two textures made in code instead of image files) |
 | `transforms` | Transformations |
-| `lighting` | Basic Lighting (Phong, a lamp, an orbiting camera) |
+| `lighting` | Basic Lighting (Phong, a lamp, an orbiting camera). Its shaders are files you can edit while it runs. |
 
 ```bash
 mbuild run lighting

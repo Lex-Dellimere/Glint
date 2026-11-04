@@ -11,6 +11,14 @@ import "glint_common";
 extern fn glint_dlopen(path: cstring, flags: int32) -> rawptr = "dlopen";
 extern fn glint_dlsym(h: rawptr, name: cstring) -> rawptr = "dlsym";
 extern fn glint_getenv(name: cstring) -> cstring = "getenv";
+extern fn glint_stat(path: cstring, st: uint8*) -> int32 = "stat";
+
+// A file's last change time in nanoseconds, 0 if it can't be read.
+export fn glint_internal_mtime(path: cstring) -> int64 {
+  var st: uint8[256];
+  if (glint_stat(path, &st[0]) != 0) { return 0; }
+  return *(int64*)(&st[0] + 88) * 1000000000 + *(int64*)(&st[0] + 96);   // st_mtim on x86-64
+}
 
 // ---- EGL ----
 struct GlintEgl {

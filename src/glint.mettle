@@ -7,5 +7,6 @@ import "glint_types";
 import "glint_gl";
 import "glint_ext";
 import "glint_common";
+import "glint_shader";
 import "glint_linux.mettle" if linux;
 import "glint_windows.mettle" if windows;

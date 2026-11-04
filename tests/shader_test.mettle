@@ -1,0 +1,165 @@
+// Shaders: files with #include, error file and line, hot reload keeping the
+// old program on failure, uniform cache and setters, listing, separable
+// programs with a pipeline, and SPIR-V when the driver has it.
+import "std/io";
+import "std/mem";
+import "glint/glint";
+
+var fails: int32 = 0;
+var vao: uint32 = 0;
+
+fn check(name: string, ok: bool) {
+  if (ok) { println("ok   {name}"); } else { print("FAIL {name}: "); print_cstr(glint_error()); println(""); fails += 1; }
+}
+
+fn has(hay: cstring, needle: string) -> bool {
+  var i: int64 = 0;
+  while (hay[i] != 0) {
+    var j: int64 = 0;
+    while (j < (int64)needle.length && hay[i + j] == (uint8)needle[j]) { j += 1; }
+    if (j == (int64)needle.length) { return true; }
+    i += 1;
+  }
+  return false;
+}
+
+// File times tick every few ms, so wait a little before each rewrite.
+fn write(path: cstring, text: string) {
+  var t0: float64 = glint_time();
+  while (glint_time() - t0 < 0.05) { }
+  var f: cstring = fopen(path, "wb");
+  fwrite((cstring)text.chars, 1, (int64)text.length, f);
+  fclose(f);
+}
+
+// Draw a full-screen triangle with whatever program/pipeline is bound; return the middle pixel (RGB).
+fn draw(c: GlintContext*) -> uint32 {
+  glClearColor(0.0, 0.0, 0.0, 1.0);
+  glClear(GL_COLOR_BUFFER_BIT);
+  glBindVertexArray(vao);
+  glDrawArrays(GL_TRIANGLES, 0, 3);
+  return glint_read_pixel(c, 16, 16) & 0xFFFFFF;
+}
+
+fn near(a: uint32, b: uint32) -> bool {
+  for s in 0..3 {
+    var sh: uint32 = (uint32)(s * 8);
+    var d: int32 = (int32)((a >> sh) & 255) - (int32)((b >> sh) & 255);
+    if (d < -3 || d > 3) { return false; }
+  }
+  return true;
+}
+
+fn main() -> int32 {
+  var c: GlintContext* = glint_open_headless(32, 32, (GlintConfig*)0);
+  if (c == 0) { print("FAIL open: "); print_cstr(glint_error()); println(""); return 1; }
+  var v: float32[6] = [-1.0, -1.0, 3.0, -1.0, -1.0, 3.0];
+  var vbo: uint32 = 0;
+  glGenVertexArrays(1, &vao);
+  glBindVertexArray(vao);
+  glGenBuffers(1, &vbo);
+  glBindBuffer(GL_ARRAY_BUFFER, vbo);
+  glBufferData(GL_ARRAY_BUFFER, 24, (rawptr)&v[0], GL_STATIC_DRAW);
+  glVertexAttribPointer(0, 2, GL_FLOAT, (uint8)0, 8, (rawptr)0);
+  glEnableVertexAttribArray(0);
+
+  // files + #include + uniforms
+  var p: GlintProgram* = glint_program_new();
+  glint_program_add_file(p, GL_VERTEX_SHADER, "tests/data/shaders/tri.vert");
+  glint_program_add_file(p, GL_FRAGMENT_SHADER, "tests/data/shaders/tri.frag");
+  check("build from files with #include", glint_program_build(p));
+  check("program read 3 files (2 + include)", p->nfiles == 3);
+  check("set vec4", glint_set_vec4(p, "col", 1.0, 1.0, 1.0, 1.0));
+  check("set float", glint_set_float(p, "k", 1.0));
+  check("missing uniform gives false", !glint_set_float(p, "nope", 1.0));
+  check("location is cached", glint_loc(p, "col") == glint_loc(p, "col") && p->nu == 3);
+  glint_program_use(p);
+  var px: uint32 = draw(c);
+  check("include + uniforms draw (1, 0.5, 0.25)", near(px, 0xFF8040));
+  glint_set_float(p, "k", 0.5);
+  check("uniform change shows", near(draw(c), 0x804020));
+  check("2 active uniforms", glint_uniform_count(p->id) == 2);
+  check("1 active attribute", glint_attrib_count(p->id) == 1);
+  var name: uint8[64];
+  var kind: uint32 = 0;
+  var size: int32 = 0;
+  var found: bool = false;
+  for i in 0..glint_uniform_count(p->id) {
+    var l: int32 = glint_uniform_info(p->id, i, &name[0], 64, &kind, &size);
+    if (glint_internal_cstr_is((cstring)&name[0], "col")) { found = l >= 0 && glint_glsl_type(kind) == "vec4"; }
+  }
+  check("uniform col is a vec4", found);
+  var al: int32 = glint_attrib_info(p->id, 0, &name[0], 64, &kind, &size);
+  check("attribute aPos at 0 is a vec2", al == 0 && glint_glsl_type(kind) == "vec2");
+
+  // an error in an included file names that file and line
+  var bad: uint32 = glint_shader_file(GL_FRAGMENT_SHADER, "tests/data/shaders/broken.frag");
+  check("broken shader gives 0", bad == 0);
+  var err: cstring = glint_error();
+  check("error names inc/bad.glsl line 3", has(err, "inc/bad.glsl:3:"));
+  check("missing include is reported", glint_shader(GL_FRAGMENT_SHADER, "#version 330 core\n#include \"no/such.glsl\"\nvoid main() {{}\n") == 0 && has(glint_error(), "no/such.glsl"));
+
+  // hot reload
+  var hot: cstring = ".mbuild/glint_hot.frag";
+  write(hot, "#version 330 core\nout vec4 o;\nvoid main() {{ o = vec4(1.0, 0.0, 0.0, 1.0); }\n");
+  var h: GlintProgram* = glint_program_new();
+  glint_program_add_file(h, GL_VERTEX_SHADER, "tests/data/shaders/tri.vert");
+  glint_program_add_file(h, GL_FRAGMENT_SHADER, "glint_hot.frag");     // fixed below
+  free((rawptr)h->paths[1]);
+  h->paths[1] = (cstring)".mbuild/glint_hot.frag";
+  check("hot: first build", glint_program_build(h));
+  check("hot: nothing changed", glint_program_reload(h) == 0);
+  glint_program_use(h);
+  check("hot: red", near(draw(c), 0xFF0000));
+  write(hot, "#version 330 core\nout vec4 o;\nvoid main() {{ o = vec4(0.0, 0.0, 1.0, 1.0); }\n");
+  check("hot: rebuilt after change", glint_program_reload(h) == 1 && h->version == 2);
+  glint_program_use(h);
+  check("hot: blue", near(draw(c), 0x0000FF));
+  var keep: uint32 = h->id;
+  write(hot, "#version 330 core\nout vec4 o;\nvoid main() {{ o = oops; }\n");
+  check("hot: broken edit gives -1", glint_program_reload(h) == -1);
+  check("hot: old program kept", h->id == keep && near(draw(c), 0x0000FF));
+  check("hot: error names the file", has(glint_error(), ".mbuild/glint_hot.frag:3:"));
+  write(hot, "#version 330 core\nout vec4 o;\nvoid main() {{ o = vec4(0.0, 1.0, 0.0, 1.0); }\n");
+  check("hot: fixed again", glint_program_reload(h) == 1);
+  glint_program_use(h);
+  check("hot: green", near(draw(c), 0x00FF00));
+  h->paths[1] = (cstring)0;      // not ours to free
+  glint_program_free(h);
+
+  // separable programs + a pipeline (GL 4.1)
+  var vs: GlintProgram* = glint_program_new();
+  vs->separable = true;
+  glint_program_add_file(vs, GL_VERTEX_SHADER, "tests/data/shaders/sep.vert");
+  var fs: GlintProgram* = glint_program_new();
+  fs->separable = true;
+  glint_program_add_file(fs, GL_FRAGMENT_SHADER, "tests/data/shaders/sep.frag");
+  check("separable programs build", glint_program_build(vs) && glint_program_build(fs));
+  var pp: uint32 = glint_pipeline(vs->id, fs->id);
+  glUseProgram(0);
+  glBindProgramPipeline(pp);
+  glBindVertexArray(vao);
+  check("pipeline is valid", glint_pipeline_check(pp));
+  check("pipeline draws cyan", near(draw(c), 0x00FFFF));
+  glBindProgramPipeline(0);
+  glDeleteProgramPipelines(1, &pp);
+
+  // SPIR-V (GL 4.6 or GL_ARB_gl_spirv)
+  if (glint_gl_version(c) >= 46 || glint_has_ext("GL_ARB_gl_spirv")) {
+    var sp: GlintProgram* = glint_program_new();
+    glint_program_add_spirv(sp, GL_VERTEX_SHADER, "tests/data/spv/tri.vert.spv", "main");
+    glint_program_add_spirv(sp, GL_FRAGMENT_SHADER, "tests/data/spv/tri.frag.spv", "main");
+    check("SPIR-V program builds", glint_program_build(sp));
+    glint_program_use(sp);
+    check("SPIR-V draws magenta", near(draw(c), 0xFF00FF));
+    glint_program_free(sp);
+  } else {
+    println("skip SPIR-V: GL {glint_gl_version(c)} without GL_ARB_gl_spirv");
+    check("SPIR-V refused cleanly", glint_shader_spirv_file(GL_VERTEX_SHADER, "tests/data/spv/tri.vert.spv", "main") == 0);
+  }
+  check("no GL error", glGetError() == 0);
+  glint_program_free(p);
+  glint_close(c);
+  if (fails != 0) { println("{fails} failed"); return 1; }
+  return 0;
+}
