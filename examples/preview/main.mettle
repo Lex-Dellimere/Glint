@@ -1,0 +1,134 @@
+// A live preview: a lit cube in a window docked on the right of the screen.
+// Run it from the project folder:
+//
+//   mbuild run preview          # edit shaders/*.vert|frag|glsl or color.txt: it updates
+//   mbuild live preview         # the same, and edits to this file are patched in too
+//   mbuild run preview -- --headless out.ppm    # one frame, no window
+//
+// Drag with the left mouse button to turn the camera, scroll to zoom, R to
+// reset, Escape to quit. A shader error shows at the top of the window while
+// the last good shader keeps drawing.
+import "std/io";
+import "std/mem";
+import "glint/glint_preview";
+
+var prog: GlintProgram* = (GlintProgram*)0;
+var vao: uint32 = 0;
+var color: float32[3] = [1.0, 0.5, 0.31];
+
+// A unit cube: 36 vertices of position + normal.
+fn make_cube() -> uint32 {
+  var f: float32[54] = [
+     1.0, 0.0, 0.0,   0.0, 0.0, -1.0,  0.0, 1.0, 0.0,
+    -1.0, 0.0, 0.0,   0.0, 0.0, 1.0,   0.0, 1.0, 0.0,
+     0.0, 1.0, 0.0,   1.0, 0.0, 0.0,   0.0, 0.0, -1.0,
+     0.0, -1.0, 0.0,  1.0, 0.0, 0.0,   0.0, 0.0, 1.0,
+     0.0, 0.0, 1.0,   1.0, 0.0, 0.0,   0.0, 1.0, 0.0,
+     0.0, 0.0, -1.0, -1.0, 0.0, 0.0,   0.0, 1.0, 0.0];
+  var su: float32[6] = [-0.5, 0.5, 0.5, 0.5, -0.5, -0.5];
+  var sv: float32[6] = [-0.5, -0.5, 0.5, 0.5, 0.5, -0.5];
+  var v: float32[216];
+  var k: int32 = 0;
+  for face in 0..6 {
+    var b: int32 = face * 9;
+    for c in 0..6 {
+      for axis in 0..3 {
+        v[k + axis] = f[b + axis] * 0.5 + f[b + 3 + axis] * su[c] + f[b + 6 + axis] * sv[c];
+        v[k + 3 + axis] = f[b + axis];
+      }
+      k += 6;
+    }
+  }
+  var a: uint32 = 0;
+  var buf: uint32 = 0;
+  glGenVertexArrays(1, &a);
+  glBindVertexArray(a);
+  glGenBuffers(1, &buf);
+  glBindBuffer(GL_ARRAY_BUFFER, buf);
+  glBufferData(GL_ARRAY_BUFFER, 864, (rawptr)&v[0], GL_STATIC_DRAW);
+  glVertexAttribPointer(0, 3, GL_FLOAT, (uint8)0, 24, (rawptr)0);
+  glVertexAttribPointer(1, 3, GL_FLOAT, (uint8)0, 24, (rawptr)12);
+  glEnableVertexAttribArray(0);
+  glEnableVertexAttribArray(1);
+  return a;
+}
+
+// color.txt holds three numbers like "1.0 0.5 0.31".
+fn load_color(user: rawptr, path: cstring) {
+  var n: int64 = 0;
+  var text: uint8* = glint_read_file(path, &n);
+  if (text == 0) { return; }
+  var vals: float32[3];
+  var got: int32 = 0;
+  var i: int64 = 0;
+  while (i < n && got < 3) {
+    while (i < n && (text[i] < (uint8)48 || text[i] > (uint8)57) && text[i] != (uint8)46) { i += 1; }
+    var whole: float32 = 0.0;
+    var frac: float32 = 0.0;
+    var scale: float32 = 1.0;
+    var dot: bool = false;
+    var any: bool = false;
+    while (i < n && ((text[i] >= (uint8)48 && text[i] <= (uint8)57) || text[i] == (uint8)46)) {
+      if (text[i] == (uint8)46) { dot = true; }
+      else if (dot) { scale = scale / 10.0; frac = frac + (float32)(text[i] - (uint8)48) * scale; }
+      else { whole = whole * 10.0 + (float32)(text[i] - (uint8)48); }
+      any = true;
+      i += 1;
+    }
+    if (any) { vals[got] = whole + frac; got += 1; }
+  }
+  free((rawptr)text);
+  if (got == 3) { color[0] = vals[0]; color[1] = vals[1]; color[2] = vals[2]; }
+}
+
+fn draw_frame(pv: GlintPreview*, user: rawptr) -> bool {
+  if (prog->id == 0) { return false; }   // never built yet: nothing good to show
+  glEnable(GL_DEPTH_TEST);
+  glClearColor(0.08, 0.09, 0.11, 1.0);
+  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+  var view: GlintMat4 = glint_preview_view(pv);
+  var proj: GlintMat4 = glint_preview_projection(pv);
+  var model: GlintMat4 = glint_mat4_rotate(pv->time * 0.3, glint_vec3(0.0, 1.0, 0.0));
+  var eye: GlintVec3 = glint_preview_eye(pv);
+  glint_set_mat4(prog, "view", &view.m[0]);
+  glint_set_mat4(prog, "projection", &proj.m[0]);
+  glint_set_mat4(prog, "model", &model.m[0]);
+  glint_set_vec3(prog, "lightPos", 2.0, 2.0, 2.0);
+  glint_set_vec3(prog, "viewPos", eye.x, eye.y, eye.z);
+  glint_set_vec3(prog, "objectColor", color[0], color[1], color[2]);
+  glint_program_use(prog);
+  glBindVertexArray(vao);
+  glDrawArrays(GL_TRIANGLES, 0, 36);
+  return true;
+}
+
+fn main(argc: int32, argv: cstring*) -> int32 {
+  var headless: bool = argc >= 3 && glint_internal_cstr_is(argv[1], "--headless");
+  var pv: GlintPreview* = (GlintPreview*)0;
+  if (headless) { pv = glint_preview_headless(800, 600); }
+  else { pv = glint_preview_open("Glint preview", 0, 0, GLINT_DOCK_RIGHT); }
+  if (pv == 0) { print("error: "); print_cstr(glint_error()); println(""); return 1; }
+  prog = glint_program_new();
+  glint_program_add_file(prog, GL_VERTEX_SHADER, "examples/preview/shaders/scene.vert");
+  glint_program_add_file(prog, GL_FRAGMENT_SHADER, "examples/preview/shaders/scene.frag");
+  glint_program_build(prog);      // if it fails, the error shows in the window until you fix it
+  glint_preview_program(pv, prog);
+  load_color((rawptr)0, "examples/preview/color.txt");
+  glint_preview_watch(pv, "examples/preview/color.txt", &load_color, (rawptr)0);
+  vao = make_cube();
+  glint_preview_orbit(pv, glint_vec3(0.0, 0.0, 0.0), 3.0);
+  if (headless) {
+    glint_preview_begin(pv);
+    var ok: bool = draw_frame(pv, (rawptr)0);
+    glint_preview_end(pv, ok);
+    var px: uint8* = (uint8*)malloc(800 * 600 * 4);
+    glint_read_rgba(pv->ctx, px);
+    glint_write_ppm(argv[2], 800, 600, px);
+    free((rawptr)px);
+  } else {
+    glint_preview_run(pv, &draw_frame, (rawptr)0);
+  }
+  glint_program_free(prog);
+  glint_preview_close(pv);
+  return 0;
+}

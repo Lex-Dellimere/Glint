@@ -138,6 +138,12 @@ glint_program_use(p);
 
 **Program pipelines (GL 4.1).** Build programs with `separable = true`, then `glint_pipeline(vs_prog, fs_prog) -> uint32` puts them in a pipeline. Draw with `glUseProgram(0); glBindProgramPipeline(pp);`. `glint_pipeline_check(pp) -> bool` validates it (log in `glint_error()`). For other stages call `glUseProgramStages` yourself.
 
+## Live preview
+
+`glint/glint_preview` has a ready-made output window that reloads what you edit: see [preview.md](preview.md).
+
+Window placement: `cfg.place = true` with `cfg.x`, `cfg.y` puts Glint's own window at that screen position. `glint_screen_size(&w, &h)` gives the screen size (the work area on Windows).
+
 ## The GL functions
 
 `glint_gl` declares each GL 4.6 core function as a function pointer, filled when a context is made. A comment above each one gives its C signature. `glint_load_gl(getproc)` refills them (it returns how many were missing); you only need it if you make a context some other way. `GLINT_GL_FUNCTION_COUNT` is 657.

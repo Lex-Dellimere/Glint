@@ -3,6 +3,7 @@
 import "std/io";
 import "glint/glint";
 import "window_common";
+import "glint/glint_preview";
 
 extern fn wt_CreateWindowExW(ex: uint32, cls: uint16*, title: uint16*, style: uint32, x: int32, y: int32, w: int32, h: int32, parent: int64, menu: int64, inst: int64, param: int64) -> int64 = "CreateWindowExW";
 extern fn wt_DestroyWindow(hwnd: int64) -> int32 = "DestroyWindow";
@@ -19,6 +20,18 @@ export fn wt_main() -> int32 {
   bad_handle(GLINT_BACKEND_WGL, "existing WGL", 0x7FFFFFF0);
   existing_window(GLINT_BACKEND_WGL, "existing WGL", hwnd);
   wt_DestroyWindow(hwnd);
+  var pv: GlintPreview* = glint_preview_open("preview", 0, 0, GLINT_DOCK_RIGHT);
+  check("preview opens docked", pv != 0);
+  if (pv != 0) {
+    var sw: int32 = 0;
+    var sh: int32 = 0;
+    glint_screen_size(&sw, &sh);
+    println("     screen {sw}x{sh}, preview {pv->ctx->width}x{pv->ctx->height}");
+    check("preview frame", glint_preview_begin(pv));
+    glint_preview_end(pv, true);
+    check("preview no GL error", glGetError() == 0);
+    glint_preview_close(pv);
+  }
   if (wt_fails != 0) { println("{wt_fails} failed"); return 1; }
   return 0;
 }

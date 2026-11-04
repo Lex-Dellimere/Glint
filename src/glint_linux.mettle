@@ -13,6 +13,18 @@ extern fn glint_dlsym(h: rawptr, name: cstring) -> rawptr = "dlsym";
 extern fn glint_getenv(name: cstring) -> cstring = "getenv";
 extern fn glint_stat(path: cstring, st: uint8*) -> int32 = "stat";
 
+// Read-by-offset file access (raw system calls), for files another program
+// appends to. open returns -1 on failure.
+export fn glint_internal_fopen_read(path: cstring) -> int64 {
+  var fd: int64 = syscall(2, path, 0, 0);                  // open(path, O_RDONLY)
+  if (fd < 0) { return -1; }
+  return fd;
+}
+export fn glint_internal_fread_at(fd: int64, buf: uint8*, n: int64, off: int64) -> int64 {
+  return syscall(17, fd, buf, n, off);                     // pread64
+}
+export fn glint_internal_fclose(fd: int64) { syscall(3, fd); }
+
 // A file's last change time in nanoseconds, 0 if it can't be read.
 export fn glint_internal_mtime(path: cstring) -> int64 {
   var st: uint8[256];
@@ -88,6 +100,9 @@ struct GlintX11 {
   Sync: fn(rawptr, int32) -> int32;
   Free: fn(rawptr) -> int32;
   SetErrorHandler: fn(rawptr) -> rawptr;
+  MoveWindow: fn(rawptr, int64, int32, int32) -> int32;
+  DisplayWidth: fn(rawptr, int32) -> int32;
+  DisplayHeight: fn(rawptr, int32) -> int32;
   XkbSetDetectableAutoRepeat: fn(rawptr, int32, int32*) -> int32;
 }
 
@@ -172,6 +187,9 @@ fn load_x11() -> bool {
   x11.Sync = (fn(rawptr, int32) -> int32)glint_dlsym(h, "XSync");
   x11.Free = (fn(rawptr) -> int32)glint_dlsym(h, "XFree");
   x11.SetErrorHandler = (fn(rawptr) -> rawptr)glint_dlsym(h, "XSetErrorHandler");
+  x11.MoveWindow = (fn(rawptr, int64, int32, int32) -> int32)glint_dlsym(h, "XMoveWindow");
+  x11.DisplayWidth = (fn(rawptr, int32) -> int32)glint_dlsym(h, "XDisplayWidth");
+  x11.DisplayHeight = (fn(rawptr, int32) -> int32)glint_dlsym(h, "XDisplayHeight");
   x11.XkbSetDetectableAutoRepeat = (fn(rawptr, int32, int32*) -> int32)glint_dlsym(h, "XkbSetDetectableAutoRepeat");
   if (x11.OpenDisplay == 0 || x11.CreateWindow == 0) { glint_internal_fail("libX11 is missing functions"); return false; }
   return true;
@@ -535,7 +553,10 @@ fn x_open_window(ctx: GlintContext*, title: string, w: int32, h: int32, cfg: Gli
   put64(&swa[0], 72, 1 | 2 | 4 | 8 | 64 | 32768 | 131072 | 2097152);
   put64(&swa[0], 96, cmap);                      // colormap
   var mask: int64 = 2 | 8 | 2048 | 8192;          // CWBackPixel CWBorderPixel CWEventMask CWColormap
-  var win: int64 = x11.CreateWindow(ctx->x_dpy, root, 0, 0, (uint32)w, (uint32)h, 0, depth, 1, visual, mask, &swa[0]);
+  var px: int32 = 0;
+  var py: int32 = 0;
+  if (cfg->place) { px = cfg->x; py = cfg->y; }
+  var win: int64 = x11.CreateWindow(ctx->x_dpy, root, px, py, (uint32)w, (uint32)h, 0, depth, 1, visual, mask, &swa[0]);
   if (win == 0) { glint_internal_fail("XCreateWindow failed"); return false; }
   ctx->win = win;
   ctx->owns_win = true;
@@ -546,16 +567,24 @@ fn x_open_window(ctx: GlintContext*, title: string, w: int32, h: int32, cfg: Gli
   free((rawptr)t);
   ctx->wm_delete = x11.InternAtom(ctx->x_dpy, "WM_DELETE_WINDOW", 0);
   x11.SetWMProtocols(ctx->x_dpy, win, &ctx->wm_delete, 1);
-  if (!cfg->resizable) {
+  if (!cfg->resizable || cfg->place) {
     var hints: uint8[128];
     memset((rawptr)&hints[0], 0, 128);
-    put64(&hints[0], 0, 16 | 32);                // PMinSize | PMaxSize
+    var flags: int64 = 0;
+    if (!cfg->resizable) { flags = 16 | 32; }    // PMinSize | PMaxSize
+    if (cfg->place) {                           // USPosition | USSize: the WM should keep it there
+      flags = flags | 1 | 2;
+      *(int32*)(&hints[0] + 8) = px; *(int32*)(&hints[0] + 12) = py;
+      *(int32*)(&hints[0] + 16) = w; *(int32*)(&hints[0] + 20) = h;
+    }
+    put64(&hints[0], 0, flags);
     *(int32*)(&hints[0] + 24) = w; *(int32*)(&hints[0] + 28) = h;
     *(int32*)(&hints[0] + 32) = w; *(int32*)(&hints[0] + 36) = h;
     x11.SetWMNormalHints(ctx->x_dpy, win, &hints[0]);
   }
   if (x11.XkbSetDetectableAutoRepeat != 0) { x11.XkbSetDetectableAutoRepeat(ctx->x_dpy, 1, (int32*)0); }
   if (cfg->visible) { x11.MapWindow(ctx->x_dpy, win); }
+  if (cfg->place) { x11.MoveWindow(ctx->x_dpy, win, px, py); }
   x11.Flush(ctx->x_dpy);
   return true;
 }
@@ -568,6 +597,18 @@ fn x_connect(ctx: GlintContext*) -> bool {
 }
 
 // ---- public API ----
+
+// Size of the screen in pixels (the default X screen). False if there is no display.
+export fn glint_screen_size(w: int32*, h: int32*) -> bool {
+  if (!load_x11()) { return false; }
+  var d: rawptr = x11.OpenDisplay((cstring)0);
+  if (d == 0) { glint_internal_fail("cannot open the X11 display"); return false; }
+  var s: int32 = x11.DefaultScreen(d);
+  *w = x11.DisplayWidth(d, s);
+  *h = x11.DisplayHeight(d, s);
+  x11.CloseDisplay(d);
+  return true;
+}
 
 // The X visual and depth a GL window needs, for programs that make their own
 // X11 window (for example over their own socket) and then call

@@ -7,6 +7,7 @@ Glint is OpenGL 4.6 for [Mettle](https://github.com/The-Mettle-Project/Mettle). 
 - **a context** on Glint's own window, on a window your program already has (an X11 window id or an HWND), or **headless** with no window at all, with pixel readback;
 - **Linux** through EGL, with GLX as the fallback, and **Windows** through WGL;
 - shaders from strings or files with `#include`, errors that name the file and line, programs that rebuild when you save their files, cached uniforms and setters, SPIR-V, and program pipelines;
+- a live preview window (`glint_preview`): docked beside your editor, it reloads shaders and files when you save, shows errors in the window, keeps the last good frame, has an orbit camera, and works with `mbuild live` for code changes;
 - small helpers: debug output, pixel readback, PPM saving, and a little vector and matrix math (`glint_math`).
 
 It is a plain library, not an engine: use it for a game engine, a GUI renderer, a tool, or tests.
@@ -98,6 +99,7 @@ Ports of [LearnOpenGL](https://learnopengl.com) chapters, in `examples/`:
 | `triangle` | Hello Triangle |
 | `textures` | Textures (two textures made in code instead of image files) |
 | `transforms` | Transformations |
+| `preview` | A live preview: a lit cube docked on the right; edit its shaders or `color.txt` while it runs. See [docs/preview.md](docs/preview.md). |
 | `lighting` | Basic Lighting (Phong, a lamp, an orbiting camera). Its shaders are files you can edit while it runs. |
 
 ```bash

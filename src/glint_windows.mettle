@@ -43,7 +43,29 @@ extern fn glint_w32_SetPixelFormat(hdc: int64, fmt: int32, pfd: uint8*) -> int32
 extern fn glint_w32_GetPixelFormat(hdc: int64) -> int32 = "GetPixelFormat";
 extern fn glint_w32_DescribePixelFormat(hdc: int64, fmt: int32, n: uint32, pfd: uint8*) -> int32 = "DescribePixelFormat";
 extern fn glint_w32_SwapBuffers(hdc: int64) -> int32 = "SwapBuffers";
+extern fn glint_w32_SystemParametersInfoW(action: uint32, p: uint32, out: rawptr, ini: uint32) -> int32 = "SystemParametersInfoW";
 extern fn glint_w32_GetFileAttributesExA(path: cstring, level: int32, out: uint8*) -> int32 = "GetFileAttributesExA";
+
+extern fn glint_w32_CreateFileA(path: cstring, access: uint32, share: uint32, sec: rawptr, disp: uint32, flags: uint32, tmpl: int64) -> int64 = "CreateFileA";
+extern fn glint_w32_ReadFile(h: int64, buf: uint8*, n: uint32, got: uint32*, ov: uint8*) -> int32 = "ReadFile";
+extern fn glint_w32_CloseHandle(h: int64) -> int32 = "CloseHandle";
+
+// Read-by-offset file access, sharing the file with programs that write it.
+export fn glint_internal_fopen_read(path: cstring) -> int64 {
+  var h: int64 = glint_w32_CreateFileA(path, 2147483648, 7, (rawptr)0, 3, 128, 0);   // GENERIC_READ, share all, OPEN_EXISTING
+  if (h == -1 || h == 0) { return -1; }
+  return h;
+}
+export fn glint_internal_fread_at(h: int64, buf: uint8*, n: int64, off: int64) -> int64 {
+  var ov: uint8[32];
+  memset((rawptr)&ov[0], 0, 32);
+  *(uint32*)(&ov[0] + 16) = (uint32)(off & 4294967295);
+  *(uint32*)(&ov[0] + 20) = (uint32)(off >> 32);
+  var got: uint32 = 0;
+  if (glint_w32_ReadFile(h, buf, (uint32)n, &got, &ov[0]) == 0) { return 0; }
+  return (int64)got;
+}
+export fn glint_internal_fclose(h: int64) { glint_w32_CloseHandle(h); }
 
 // A file's last write time (100 ns units), 0 if it can't be read.
 export fn glint_internal_mtime(path: cstring) -> int64 {
@@ -191,6 +213,10 @@ fn w32_class() -> bool {
 }
 
 fn w32_window(title: string, w: int32, h: int32, resizable: bool, visible: bool) -> int64 {
+  return w32_window_at(title, w, h, resizable, visible, false, 0, 0);
+}
+
+fn w32_window_at(title: string, w: int32, h: int32, resizable: bool, visible: bool, place: bool, x: int32, y: int32) -> int64 {
   if (!w32_class()) { return 0; }
   var style: uint32 = 13565952;                            // WS_OVERLAPPEDWINDOW
   if (!resizable) { style = 13238272; }                    // WS_OVERLAPPED | CAPTION | SYSMENU | MINIMIZEBOX
@@ -198,7 +224,10 @@ fn w32_window(title: string, w: int32, h: int32, resizable: bool, visible: bool)
   glint_w32_AdjustWindowRectEx(&r, style, 0, 0);
   var t: uint16* = wide(title);
   var cw: int32 = -2147483648;                             // CW_USEDEFAULT
-  var hwnd: int64 = glint_w32_CreateWindowExW(0, &g_class_name[0], t, style, cw, cw, r.right - r.left, r.bottom - r.top,
+  var wx: int32 = cw;
+  var wy: int32 = cw;
+  if (place) { wx = x; wy = y; }
+  var hwnd: int64 = glint_w32_CreateWindowExW(0, &g_class_name[0], t, style, wx, wy, r.right - r.left, r.bottom - r.top,
                                               0, 0, glint_w32_GetModuleHandleW((uint16*)0), 0);
   free((rawptr)t);
   if (hwnd == 0) { glint_internal_fail("CreateWindowExW failed"); return 0; }
@@ -315,7 +344,7 @@ fn client_size(ctx: GlintContext*) {
 fn open_own(title: string, w: int32, h: int32, cfg: GlintConfig*, kind: int32, visible: bool) -> GlintContext* {
   var ctx: GlintContext* = new GlintContext;
   ctx->kind = kind;
-  ctx->win = w32_window(title, w, h, cfg->resizable, visible);
+  ctx->win = w32_window_at(title, w, h, cfg->resizable, visible, cfg->place, cfg->x, cfg->y);
   if (ctx->win == 0) { free((rawptr)ctx); return (GlintContext*)0; }
   ctx->owns_win = true;
   glint_w32_SetWindowLongPtrW(ctx->win, -21, (int64)ctx);
@@ -377,6 +406,15 @@ export fn glint_open_shared(parent: GlintContext*, w: int32, h: int32) -> GlintC
     return (GlintContext*)0;
   }
   return ctx;
+}
+
+// Size of the work area (the screen without the taskbar) in pixels.
+export fn glint_screen_size(w: int32*, h: int32*) -> bool {
+  var r: GlintW32Rect;
+  if (glint_w32_SystemParametersInfoW(48, 0, (rawptr)&r, 0) == 0) { return false; }   // SPI_GETWORKAREA
+  *w = r.right - r.left;
+  *h = r.bottom - r.top;
+  return true;
 }
 
 // X11 only; on Windows this returns false.

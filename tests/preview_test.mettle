@@ -1,0 +1,163 @@
+// The preview, headless: shader reload, the error banner, keeping the last
+// good frame, mbuild live events, watched files and the orbit camera.
+import "std/io";
+import "std/mem";
+import "glint/glint_preview";
+
+
+var fails: int32 = 0;
+var vao: uint32 = 0;
+var prog: GlintProgram* = (GlintProgram*)0;
+var watched: int32 = 0;
+
+fn check(name: string, ok: bool) {
+  if (ok) { println("ok   {name}"); } else { println("FAIL {name}"); fails += 1; }
+}
+
+fn write(path: cstring, text: string) {
+  var t0: float64 = glint_time();
+  while (glint_time() - t0 < 0.05) { }        // file times tick every few ms
+  var f: cstring = fopen(path, "wb");
+  fwrite((cstring)text.chars, 1, (int64)text.length, f);
+  fclose(f);
+}
+
+fn append(path: cstring, text: string) {
+  var f: cstring = fopen(path, "ab");
+  fwrite((cstring)text.chars, 1, (int64)text.length, f);
+  fclose(f);
+}
+
+fn frag(r: string) -> string {
+  return "#version 330 core\nout vec4 o;\nvoid main() {{ o = vec4(" + r + "); }\n";
+}
+
+fn draw(pv: GlintPreview*, user: rawptr) -> bool {
+  glClearColor(0.0, 0.0, 0.0, 1.0);
+  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+  glint_program_use(prog);
+  glBindVertexArray(vao);
+  glDrawArrays(GL_TRIANGLES, 0, 3);
+  return true;
+}
+
+fn on_change(user: rawptr, path: cstring) { watched += 1; }
+
+// One frame; ok = false says the frame failed.
+fn frame(pv: GlintPreview*, ok: bool) {
+  glint_preview_begin(pv);
+  if (ok) { draw(pv, (rawptr)0); }
+  else { glClearColor(1.0, 1.0, 1.0, 1.0); glClear(GL_COLOR_BUFFER_BIT); }   // garbage that must not show
+  glint_preview_end(pv, ok);
+}
+
+fn rgb(pv: GlintPreview*, x: int32, y: int32) -> uint32 { return glint_read_pixel(pv->ctx, x, y) & 0xFFFFFF; }
+
+fn main() -> int32 {
+  var evs: cstring = ".mbuild/glint_live_events";
+  write(evs, "");
+  var pv: GlintPreview* = glint_preview_headless(320, 240);
+  if (pv == 0) { print("FAIL open: "); print_cstr(glint_error()); println(""); return 1; }
+  glint_preview_live_events(pv, evs);
+  var v: float32[6] = [-1.0, -1.0, 3.0, -1.0, -1.0, 3.0];
+  var vbo: uint32 = 0;
+  glGenVertexArrays(1, &vao);
+  glBindVertexArray(vao);
+  glGenBuffers(1, &vbo);
+  glBindBuffer(GL_ARRAY_BUFFER, vbo);
+  glBufferData(GL_ARRAY_BUFFER, 24, (rawptr)&v[0], GL_STATIC_DRAW);
+  glVertexAttribPointer(0, 2, GL_FLOAT, (uint8)0, 8, (rawptr)0);
+  glEnableVertexAttribArray(0);
+
+  var fpath: cstring = ".mbuild/glint_preview.frag";
+  write(fpath, frag("0.0, 0.0, 1.0, 1.0"));
+  prog = glint_program_new();
+  glint_program_add_file(prog, GL_VERTEX_SHADER, "tests/data/shaders/tri.vert");
+  glint_program_add_source(prog, GL_FRAGMENT_SHADER, "#version 330 core\nvoid main() {{}\n");
+  prog->texts[1] = (cstring)0;
+  prog->paths[1] = fpath;          // the frag stage reads our temp file
+  check("build", glint_program_build(prog));
+  glint_preview_program(pv, prog);
+  write(".mbuild/glint_asset.txt", "one");
+  glint_preview_watch(pv, ".mbuild/glint_asset.txt", &on_change, (rawptr)0);
+
+  frame(pv, true);
+  check("draws blue", rgb(pv, 160, 200) == 0x0000FF);
+  check("no banner at first", !glint_preview_has_error(pv) && rgb(pv, 5, 5) == 0x0000FF);
+
+  // break the shader: the old one keeps drawing, the error shows at the top
+  write(fpath, frag("oops"));
+  frame(pv, true);
+  check("broken shader: error kept", glint_preview_has_error(pv));
+  print("     banner text: ");
+  print_cstr(glint_preview_error_text(pv));
+  check("error names the file", glint_internal_cstr_is(glint_preview_error_text(pv), "") == false);
+  check("broken shader: old program still draws", rgb(pv, 160, 200) == 0x0000FF);
+  check("banner covers the top", rgb(pv, 5, 5) != 0x0000FF);
+
+  // fix it: rebuilt, banner gone
+  write(fpath, frag("0.0, 1.0, 0.0, 1.0"));
+  frame(pv, true);
+  check("fixed: no error", !glint_preview_has_error(pv));
+  check("fixed: draws green", rgb(pv, 160, 200) == 0x00FF00 && rgb(pv, 5, 5) == 0x00FF00);
+
+  // a failed frame shows the last good one
+  frame(pv, false);
+  check("failed frame shows the last good one", rgb(pv, 160, 120) == 0x00FF00);
+  frame(pv, true);
+
+  // mbuild live events
+  append(evs, "patch-error src/scene.mettle:12:5: undefined name 'colr'\n");
+  frame(pv, true);
+  check("patch error shows", glint_preview_has_error(pv) && rgb(pv, 5, 5) != 0x00FF00);
+  append(evs, "patched draw_frame\nexited 0\nsomething-new later\n");
+  frame(pv, true);
+  check("patched clears it", !glint_preview_has_error(pv) && pv->patches == 1);
+  append(evs, "paused\n");
+  frame(pv, true);
+  check("paused shows", pv->paused && rgb(pv, 5, 5) != 0x00FF00);
+  append(evs, "resum");                // half a line: not read yet
+  frame(pv, true);
+  check("half line waits", pv->paused);
+  append(evs, "ed\n");
+  frame(pv, true);
+  check("resumed", !pv->paused);
+
+  // a watched file
+  write(".mbuild/glint_asset.txt", "two");
+  frame(pv, true);
+  check("watched file callback ran", watched == 1);
+
+  // your own error
+  glint_preview_error(pv, "could not load model.obj");
+  frame(pv, true);
+  check("user error shows", glint_preview_has_error(pv));
+  glint_preview_error(pv, "");
+
+  // orbit camera
+  glint_preview_orbit(pv, glint_vec3(0.0, 0.0, 0.0), 5.0);
+  var e0: GlintVec3 = glint_preview_eye(pv);
+  check("eye at distance 5", glint_vec3_length(e0) > 4.99 && glint_vec3_length(e0) < 5.01);
+  var ev: GlintEvent;
+  ev.kind = GLINT_EV_MOUSE_DOWN; ev.button = GLINT_MOUSE_LEFT; ev.x = 100; ev.y = 100;
+  glint_internal_push(pv->ctx, ev);
+  ev.kind = GLINT_EV_MOUSE_MOVE; ev.x = 150; ev.y = 100;
+  glint_internal_push(pv->ctx, ev);
+  ev.kind = GLINT_EV_SCROLL; ev.dy = 1;
+  glint_internal_push(pv->ctx, ev);
+  frame(pv, true);
+  var e1: GlintVec3 = glint_preview_eye(pv);
+  check("drag turned the camera", e1.x != e0.x);
+  check("scroll zoomed in", glint_vec3_length(e1) < 4.6);
+  check("events passed on", pv->nevents == 3);
+  var vm: GlintMat4 = glint_preview_view(pv);
+  var pm: GlintMat4 = glint_preview_projection(pv);
+  check("view and projection", vm.m[15] == 1.0 && pm.m[11] == -1.0);
+  check("no GL error", glGetError() == 0);
+
+  prog->paths[1] = (cstring)0;
+  glint_program_free(prog);
+  glint_preview_close(pv);
+  if (fails != 0) { println("{fails} failed"); return 1; }
+  return 0;
+}

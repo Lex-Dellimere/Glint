@@ -75,6 +75,9 @@ export struct GlintConfig {
   resizable: bool;       // own window only (default true)
   visible: bool;         // own window only (default true)
   backend: int32;        // GLINT_BACKEND_*; AUTO picks EGL, then GLX (Linux), WGL (Windows)
+  place: bool;           // own window only: put its top-left corner at x, y (screen pixels)
+  x: int32;
+  y: int32;
 }
 
 export struct GlintEvent {
@@ -136,6 +139,6 @@ export const GLINT_FORMAT_BGRA: int32 = 1;   // bytes B, G, R, A (Windows DIBs, 
 export fn glint_config() -> GlintConfig {
   var c: GlintConfig = { major: 3, minor: 3, want_major: 4, want_minor: 6, debug: false, vsync: 1,
                          depth_bits: 24, stencil_bits: 8, samples: 0, srgb: false, resizable: true,
-                         visible: true, backend: 0 };
+                         visible: true, backend: 0, place: false, x: 0, y: 0 };
   return c;
 }

@@ -4,6 +4,7 @@ import "std/io";
 import "glint/glint";
 import "xvfb";
 import "window_common";
+import "glint/glint_preview";
 
 extern fn wt_dlopen(path: cstring, flags: int32) -> rawptr = "dlopen";
 extern fn wt_dlsym(h: rawptr, name: cstring) -> rawptr = "dlsym";
@@ -33,6 +34,26 @@ export fn wt_main() -> int32 {
   existing_window(GLINT_BACKEND_EGL, "existing EGL", xid);
   existing_window(GLINT_BACKEND_GLX, "existing GLX", xid);
 
+  // a preview docked on the right of the 640x480 screen: 256 wide, full height
+  var pv: GlintPreview* = glint_preview_open("preview", 0, 0, GLINT_DOCK_RIGHT);
+  check("preview opens docked", pv != 0);
+  if (pv != 0) {
+    var wa: uint8[256];
+    var attrs: fn(rawptr, int64, uint8*) -> int32 = (fn(rawptr, int64, uint8*) -> int32)wt_dlsym(x, "XGetWindowAttributes");
+    sync(pv->ctx->x_dpy, 0);
+    attrs(pv->ctx->x_dpy, pv->ctx->win, &wa[0]);
+    var wx: int32 = *(int32*)(&wa[0]);
+    var ww: int32 = *(int32*)(&wa[0] + 8);
+    var wh: int32 = *(int32*)(&wa[0] + 12);
+    println("     preview window at x {wx}, {ww}x{wh}");
+    check("docked right: 256x480 at x 384", wx == 384 && ww == 256 && wh == 480);
+    check("preview frame", glint_preview_begin(pv));
+    glClearColor(0.0, 1.0, 0.0, 1.0);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glint_preview_end(pv, true);
+    check("preview no GL error", glGetError() == 0);
+    glint_preview_close(pv);
+  }
   xvfb_stop();
   if (wt_fails != 0) { println("{wt_fails} failed"); return 1; }
   return 0;
