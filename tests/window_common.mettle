@@ -1,0 +1,58 @@
+// Shared checks for the window tests.
+import "std/io";
+import "glint/glint";
+
+export var wt_fails: int32 = 0;
+
+export fn check(name: string, ok: bool) {
+  if (ok) { println("ok   {name}"); } else { print("FAIL {name}: "); print_cstr(glint_error()); println(""); wt_fails += 1; }
+}
+
+export fn near(a: uint32, b: uint32) -> bool {
+  for s in 0..4 {
+    var sh: uint32 = (uint32)(s * 8);
+    var d: int32 = (int32)((a >> sh) & 255) - (int32)((b >> sh) & 255);
+    if (d < -3 || d > 3) { return false; }
+  }
+  return true;
+}
+
+// Clear to blue, read it back before the swap, then swap.
+export fn draw_check(ctx: GlintContext*, label: string) {
+  glClearColor(0.0, 0.0, 1.0, 1.0);
+  glClear(GL_COLOR_BUFFER_BIT);
+  var px: uint32 = glint_read_pixel(ctx, 5, 5);
+  check("{label}: pixel is blue", near(px, 0xFF0000FF));
+  glint_swap(ctx);
+  check("{label}: no GL error", glGetError() == 0);
+}
+
+// Glint's own window: open, draw, events, resize, vsync, close.
+export fn own_window(backend: int32, label: string) {
+  var cfg: GlintConfig = glint_config();
+  cfg.backend = backend;
+  cfg.vsync = 0;
+  var ctx: GlintContext* = glint_open_window("glint test", 160, 120, &cfg);
+  check("{label}: open", ctx != 0);
+  if (ctx == 0) { return; }
+  println("     {glint_backend_name(ctx)} GL {glint_gl_version(ctx)}");
+  check("{label}: backend", ctx->backend == backend);
+  check("{label}: size", ctx->width == 160 && ctx->height == 120);
+  draw_check(ctx, label);
+  var ev: GlintEvent;
+  while (glint_poll(ctx, &ev)) { }
+  check("{label}: resize", glint_resize(ctx, 200, 150));
+  glint_set_vsync(ctx, 0);
+  glint_close(ctx);
+}
+
+export fn existing_window(backend: int32, label: string, handle: int64) {
+  var cfg: GlintConfig = glint_config();
+  cfg.backend = backend;
+  var ctx: GlintContext* = glint_open_existing(handle, &cfg);
+  check("{label}: open on app window", ctx != 0);
+  if (ctx == 0) { return; }
+  check("{label}: size from window", ctx->width == 120 && ctx->height == 90);
+  draw_check(ctx, label);
+  glint_close(ctx);
+}

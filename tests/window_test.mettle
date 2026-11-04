@@ -1,0 +1,5 @@
+// Window tests: own window and an app's window, on each platform's backends.
+import "window_linux.mettle" if linux;
+import "window_windows.mettle" if windows;
+
+fn main() -> int32 { return wt_main(); }

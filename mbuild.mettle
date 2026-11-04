@@ -1,0 +1,30 @@
+// mbuild.mettle: Glint's project file. `mbuild help` lists its commands.
+import "mbuild/api";
+
+fn project() {
+  mb_package("glint", "0.1.0");
+  mb_meta("description", "OpenGL 4.6 for Mettle: every core function and enum, extensions, EGL/GLX/WGL contexts, windows and headless");
+  mb_meta("license", "Apache-2.0");
+  mb_import_root("src");
+  mb_on("linux");
+  mb_link_libs("c");          // dlopen; libEGL, libGL and libX11 load at run time
+  mb_on("windows");
+  mb_link_libs("user32, gdi32");
+  mb_on("");
+}
+
+fn deps() {
+}
+
+// gen: remake src/glint_gl.mettle and src/glint_ext.mettle from registry/gl.xml
+fn cmd_gen(a: MbArgs*) -> int32 {
+  return mb_sh("python3 tools/glgen.py");
+}
+
+// wintest: run the tests as Windows programs under wine, on a private Xvfb
+// (:96) so nothing opens on your screen. Needs MBUILD_METTLE_WINDOWS.
+fn cmd_wintest(a: MbArgs*) -> int32 {
+  var r: string = "";
+  if (mb_flag(a, "-r")) { r = " -r"; }
+  return mb_sh("Xvfb :96 -noreset -screen 0 640x480x24 >/dev/null 2>&1 & XP=$!; sleep 1; DISPLAY=:96 WINEDEBUG=-all \"$MBUILD_EXE\" test -t windows --force" + r + "; S=$?; kill $XP; exit $S");
+}

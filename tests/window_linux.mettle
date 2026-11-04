@@ -1,0 +1,33 @@
+// Linux part of the window test, on a private Xvfb: Glint's own window (EGL
+// and GLX) and a window the app made itself (EGL and GLX).
+import "std/io";
+import "glint/glint";
+import "xvfb";
+import "window_common";
+
+extern fn wt_dlopen(path: cstring, flags: int32) -> rawptr = "dlopen";
+extern fn wt_dlsym(h: rawptr, name: cstring) -> rawptr = "dlsym";
+
+export fn wt_main() -> int32 {
+  if (!xvfb_start()) { println("FAIL no Xvfb"); return 1; }
+  own_window(GLINT_BACKEND_EGL, "own window EGL");
+  own_window(GLINT_BACKEND_GLX, "own window GLX");
+
+  // A window made by "the app", with plain Xlib.
+  var x: rawptr = wt_dlopen("libX11.so.6", 2);
+  var open: fn(cstring) -> rawptr = (fn(cstring) -> rawptr)wt_dlsym(x, "XOpenDisplay");
+  var root: fn(rawptr, int32) -> int64 = (fn(rawptr, int32) -> int64)wt_dlsym(x, "XDefaultRootWindow");
+  var mk: fn(rawptr, int64, int32, int32, uint32, uint32, uint32, int64, int64) -> int64 = (fn(rawptr, int64, int32, int32, uint32, uint32, uint32, int64, int64) -> int64)wt_dlsym(x, "XCreateSimpleWindow");
+  var map: fn(rawptr, int64) -> int32 = (fn(rawptr, int64) -> int32)wt_dlsym(x, "XMapWindow");
+  var sync: fn(rawptr, int32) -> int32 = (fn(rawptr, int32) -> int32)wt_dlsym(x, "XSync");
+  var dpy: rawptr = open((cstring)0);
+  var xid: int64 = mk(dpy, root(dpy, 0), 0, 0, 120, 90, 0, 0, 0);
+  map(dpy, xid);
+  sync(dpy, 0);
+  existing_window(GLINT_BACKEND_EGL, "existing EGL", xid);
+  existing_window(GLINT_BACKEND_GLX, "existing GLX", xid);
+
+  xvfb_stop();
+  if (wt_fails != 0) { println("{wt_fails} failed"); return 1; }
+  return 0;
+}

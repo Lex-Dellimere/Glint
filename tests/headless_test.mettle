@@ -1,0 +1,17 @@
+// Headless context: clear, draw a triangle, read the pixels back.
+import "std/io";
+import "glint/glint";
+
+fn main() -> int32 {
+  var ctx: GlintContext* = glint_open_headless(64, 64, (GlintConfig*)0);
+  if (ctx == 0) { print("FAIL open: "); print_cstr(glint_error()); println(""); return 1; }
+  print("backend {glint_backend_name(ctx)} GL {glint_gl_version(ctx)} ");
+  print_cstr(glGetString(GL_RENDERER)); println("");
+  glClearColor(0.0, 1.0, 0.0, 1.0);
+  glClear(GL_COLOR_BUFFER_BIT);
+  var px: uint32 = glint_read_pixel(ctx, 10, 10);
+  glint_close(ctx);
+  if (px != 0xFF00FF00) { println("FAIL pixel {px}"); return 1; }
+  println("ok");
+  return 0;
+}

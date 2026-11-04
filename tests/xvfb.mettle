@@ -1,0 +1,50 @@
+// Test helper: run a private Xvfb so window tests never touch the user's screen.
+import "std/io";
+import "std/process";
+
+extern fn xvfb_setenv(name: cstring, value: cstring, over: int32) -> int32 = "setenv";
+extern fn xvfb_access(path: cstring, mode: int32) -> int32 = "access";
+extern fn xvfb_usleep(us: uint32) -> int32 = "usleep";
+
+var g_proc: Proc;
+var g_started: bool = false;
+
+// Start Xvfb on the first free display from :97 and point DISPLAY at it.
+export fn xvfb_start() -> bool {
+  var n: int32 = 97;
+  while (n < 120) {
+    var sock: string = "/tmp/.X11-unix/X{n}";
+    var lock: string = "/tmp/.X{n}-lock";
+    var busy: bool = xvfb_access((cstring)sock.chars, 0) == 0 || xvfb_access((cstring)lock.chars, 0) == 0;
+    if (!busy) {
+      var disp: string = ":{n}";
+      var argv: string[6] = ["Xvfb", disp, "-noreset", "-screen", "0", "640x480x24"];
+      var o: ProcOptions;
+      proc_options_init(&o, argv);
+      o.stdout = PROC_NULL;
+      o.stderr = PROC_NULL;
+      if (proc_spawn(&o, &g_proc) != 0) { println("xvfb: cannot start Xvfb"); return false; }
+      g_started = true;
+      for i in 0..100 {
+        if (xvfb_access((cstring)sock.chars, 0) == 0) {
+          xvfb_usleep(100000);
+          xvfb_setenv("DISPLAY", (cstring)disp.chars, 1);
+          return true;
+        }
+        xvfb_usleep(50000);
+      }
+      println("xvfb: display {disp} did not come up");
+      return false;
+    }
+    n += 1;
+  }
+  return false;
+}
+
+export fn xvfb_stop() {
+  if (!g_started) { return; }
+  proc_send(&g_proc, PROC_SIGTERM);
+  var st: ProcStatus;
+  proc_wait(&g_proc, &st);
+  g_started = false;
+}

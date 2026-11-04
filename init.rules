@@ -1,0 +1,12 @@
+// init.rules: how `mbuild new APP --from glint` starts a project.
+// @@name@@ in paths, templates and commands is an option, or project,
+// package, package_version, mbuild_version.
+import "mbuild/init";
+
+fn options() {
+}
+
+fn plan() {
+  mi_template("templates/main.mettle.tmpl", "src/main.mettle");
+  mi_next("mbuild run");
+}
