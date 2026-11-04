@@ -14,7 +14,9 @@ import "glint/glint" (math: "glint/glint_math"). Full list: docs/api.md.
   GLboolean = uint8, const GLchar* = cstring, void* = rawptr.
 - glint_has_ext("GL_ARB_...") before calling an extension function.
 - glint_program(vs, fs) -> uint32 (0 on error, log in glint_error()).
-- headless: bind glint_framebuffer(ctx) where you would bind 0; glint_read_rgba reads pixels top-down.
+- headless: bind glint_framebuffer(ctx) where you would bind 0; glint_read_rect/glint_read_rgba read pixels top-down.
+- glint_open_shared(ctx, w, h): off-screen context sharing objects, draws into glint_color_texture(it).
+- partial redraw: glint_buffer_age before drawing, glint_swap_damage(ctx, rects, n) to present.
 
 ## Conventions
 - Every Glint export is glint_* / Glint* / GLINT_*. GL keeps gl* / GL_*. Don't declare names like these yourself.

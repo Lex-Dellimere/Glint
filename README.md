@@ -69,6 +69,8 @@ Pass `(GlintConfig*)0` for the defaults, or start from `glint_config()` and chan
 `want_major`/`want_minor` (tried first, default 4.6), `major`/`minor` (the lowest you accept, default 3.3), `debug`, `vsync`, `depth_bits`, `stencil_bits`, `samples`, `srgb`, `resizable`, `visible`, `backend`.
 Glint asks for 4.6 and steps down (4.5, 4.4 ... 3.3) until the driver says yes; `glint_gl_version(ctx)` tells you what you got.
 
+`glint_open_shared(ctx, w, h)` adds an off-screen context that shares objects with `ctx` and draws into a texture, for things like 3D viewports inside a GUI.
+
 For a headless context, `glint_framebuffer(ctx)` is the framebuffer to bind where you would bind 0.
 `glint_read_rgba(ctx, out)` reads the whole picture top row first, and `glint_write_ppm` saves it.
 

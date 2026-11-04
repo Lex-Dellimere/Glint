@@ -239,6 +239,7 @@ fn load_wgl() -> bool {
 fn wgl_on_hwnd(ctx: GlintContext*, cfg: GlintConfig*) -> bool {
   if (!load_wgl()) { return false; }
   ctx->hdc = glint_w32_GetDC(ctx->win);
+  if (ctx->hdc == 0) { glint_internal_fail("GetDC failed: not a window"); return false; }
   var pfd: uint8[40];
   if (glint_w32_GetPixelFormat(ctx->hdc) == 0) {
     var fmt: int32 = 0;
@@ -275,7 +276,9 @@ fn wgl_on_hwnd(ctx: GlintContext*, cfg: GlintConfig*) -> bool {
     a[6] = 8340; a[7] = 0;                                 // WGL_CONTEXT_FLAGS_ARB
     if (cfg->debug) { a[7] = 1; }
     a[8] = 0;
-    rc = wgl.CreateContextAttribsARB(ctx->hdc, 0, &a[0]);
+    var share: int64 = 0;
+    if (ctx->share != 0) { share = ctx->share->hglrc; }
+    rc = wgl.CreateContextAttribsARB(ctx->hdc, share, &a[0]);
     if (rc == 0 && !glint_internal_next_version(&maj, &min, cfg)) { break; }
   }
   if (rc == 0) { glint_internal_fail("wglCreateContextAttribsARB failed for every GL version tried"); return false; }
@@ -341,6 +344,48 @@ export fn glint_open_headless(w: int32, h: int32, cfg_in: GlintConfig*) -> Glint
   var store: GlintConfig;
   var cfg: GlintConfig* = cfg_or_default(cfg_in, &store);
   return open_own("glint", w, h, cfg, GLINT_KIND_HEADLESS, false);
+}
+
+// An off-screen context that shares textures, buffers and shaders with
+// `parent`; it draws into a texture (glint_color_texture). It is current when
+// this returns: call glint_make_current(parent) to go back. Uses a hidden window.
+export fn glint_open_shared(parent: GlintContext*, w: int32, h: int32) -> GlintContext* {
+  var cfg: GlintConfig = glint_config();
+  cfg.want_major = parent->gl_major; cfg.want_minor = parent->gl_minor;
+  cfg.major = parent->gl_major; cfg.minor = parent->gl_minor;
+  var ctx: GlintContext* = new GlintContext;
+  ctx->kind = GLINT_KIND_HEADLESS;
+  ctx->fbo_tex = true;
+  ctx->share = parent;
+  ctx->width = w;
+  ctx->height = h;
+  ctx->win = w32_window("glint", w, h, false, false);
+  ctx->owns_win = ctx->win != 0;
+  if (ctx->win == 0 || !wgl_on_hwnd(ctx, &cfg) || !glint_internal_setup(ctx, &cfg, &glint_getproc)) {
+    glint_close(ctx);
+    glint_make_current(parent);
+    return (GlintContext*)0;
+  }
+  return ctx;
+}
+
+// X11 only; on Windows this returns false.
+export fn glint_x11_visual(cfg: GlintConfig*, visual_id: int64*, depth: int32*) -> bool {
+  glint_internal_fail("glint_x11_visual is for X11");
+  return false;
+}
+
+// WGL has no damage swap: this swaps the whole frame and returns false.
+export fn glint_swap_damage(ctx: GlintContext*, rects: int32*, n: int32) -> bool {
+  glint_swap(ctx);
+  return false;
+}
+
+// WGL cannot tell the back buffer's age: 0 means redraw everything
+// (1 for headless contexts, whose framebuffer keeps its contents).
+export fn glint_buffer_age(ctx: GlintContext*) -> int32 {
+  if (ctx->kind == GLINT_KIND_HEADLESS) { return 1; }
+  return 0;
 }
 
 export fn glint_make_current(ctx: GlintContext*) -> bool { return wgl.MakeCurrent(ctx->hdc, ctx->hglrc) != 0; }

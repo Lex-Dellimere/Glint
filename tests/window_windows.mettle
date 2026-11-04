@@ -16,6 +16,7 @@ export fn wt_main() -> int32 {
   cls[6] = 0;
   var hwnd: int64 = wt_CreateWindowExW(0, &cls[0], &cls[0], 2147483648 | 268435456, 0, 0, 120, 90, 0, 0, 0, 0);   // WS_POPUP | WS_VISIBLE
   check("app HWND", hwnd != 0);
+  bad_handle(GLINT_BACKEND_WGL, "existing WGL", 0x7FFFFFF0);
   existing_window(GLINT_BACKEND_WGL, "existing WGL", hwnd);
   wt_DestroyWindow(hwnd);
   if (wt_fails != 0) { println("{wt_fails} failed"); return 1; }

@@ -24,6 +24,12 @@ export fn wt_main() -> int32 {
   var xid: int64 = mk(dpy, root(dpy, 0), 0, 0, 120, 90, 0, 0, 0);
   map(dpy, xid);
   sync(dpy, 0);
+  var vid: int64 = 0;
+  var depth: int32 = 0;
+  check("glint_x11_visual", glint_x11_visual((GlintConfig*)0, &vid, &depth) && vid != 0 && depth >= 24);
+  println("     visual 0x{vid} depth {depth}");
+  bad_handle(GLINT_BACKEND_EGL, "existing EGL", 0x7FFFFFF0);
+  bad_handle(GLINT_BACKEND_GLX, "existing GLX", 0x7FFFFFF0);
   existing_window(GLINT_BACKEND_EGL, "existing EGL", xid);
   existing_window(GLINT_BACKEND_GLX, "existing GLX", xid);
 

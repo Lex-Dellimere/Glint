@@ -11,9 +11,13 @@ Every Glint name starts with `glint_`, `Glint` or `GLINT_`; GL itself keeps its 
 | `glint_open_window(title: string, w, h: int32, cfg: GlintConfig*) -> GlintContext*` | A new window with a current context. |
 | `glint_open_existing(handle: int64, cfg) -> GlintContext*` | A context on your window: X11 window id or HWND. Your program keeps its events. |
 | `glint_open_headless(w, h: int32, cfg) -> GlintContext*` | No window. Draws into an off-screen framebuffer, bound on return. |
+| `glint_open_shared(parent, w, h) -> GlintContext*` | An off-screen context sharing textures, buffers and shaders with `parent`. It draws into a texture, `glint_color_texture(ctx)`, that `parent` can draw. It is current on return: `glint_make_current(parent)` goes back. Finish its drawing (`glFinish` or a fence) before `parent` reads the texture. |
+| `glint_x11_visual(cfg, &visual_id: int64, &depth: int32) -> bool` | Linux: the X visual and depth to make your own window with before `glint_open_existing`. Make a colormap for that visual too. False on Windows. |
 | `glint_close(ctx)` | Frees the context, and the window if Glint made it. |
 | `glint_make_current(ctx) -> bool` | Makes this context current on the calling thread. |
 | `glint_swap(ctx)` | Shows the frame. For headless contexts it only flushes. |
+| `glint_swap_damage(ctx, rects: int32*, n) -> bool` | Shows the frame, telling the system only `n` rectangles (x, y, w, h from the top-left) changed. Uses `EGL_KHR`/`EXT_swap_buffers_with_damage`; elsewhere it does a full swap and returns false. |
+| `glint_buffer_age(ctx) -> int32` | Ask before drawing a frame: how many frames old the back buffer is (1 = last frame's picture is there). 0 = unknown, so redraw everything. EGL and GLX with `*_EXT_buffer_age`; always 0 on WGL. |
 | `glint_set_vsync(ctx, n: int32) -> bool` | Swap interval: 1 waits for vblank, 0 does not. |
 | `glint_resize(ctx, w, h) -> bool` | Own window: resizes it. Headless: makes a new framebuffer. Existing window: records the size. |
 | `glint_set_title(ctx, title: string)` | Own window only. |
@@ -56,6 +60,8 @@ State you can ask for at any time: `glint_key_down(ctx, key)`, `glint_mouse_down
 
 With `glint_open_existing` your program owns the window and its events; `glint_poll` returns nothing.
 
+If `glint_open_existing` fails it returns 0 and never ends your program: on X11, errors are caught while Glint works on your window, and everything Glint made is freed. The window stays as it was, so you can keep presenting into it another way (on Windows, see the note on pixel formats in [platforms.md](platforms.md)).
+
 ## Helpers
 
 | Function | What it does |
@@ -64,6 +70,7 @@ With `glint_open_existing` your program owns the window and its events; `glint_p
 | `glint_program(vs: string, fs: string) -> uint32` | Compiles and links a vertex and fragment shader. 0 on failure. |
 | `glint_uniform(prog, name: cstring) -> int32` | `glGetUniformLocation`. |
 | `glint_enable_debug_output() -> bool` | Prints driver debug messages to stderr. Use with `cfg.debug = true`. |
+| `glint_read_rect(ctx, x, y, w, h, format, out: uint8*, stride: int32)` | Reads a rectangle, top row first, (x, y) from the top-left. `format` is `GLINT_FORMAT_RGBA` or `GLINT_FORMAT_BGRA`. `stride` is the bytes between rows of `out` (0 = w * 4, else a multiple of 4), so a tile can go straight into a bigger image. |
 | `glint_read_rgba(ctx, out: uint8*)` | Reads the whole drawable as RGBA8, top row first. `out` holds width * height * 4 bytes. |
 | `glint_read_pixel(ctx, x, y) -> uint32` | One pixel as 0xAARRGGBB, (x, y) from the top-left. |
 | `glint_write_ppm(path: cstring, w, h, rgba: uint8*) -> bool` | Saves RGBA pixels as a PPM image. |

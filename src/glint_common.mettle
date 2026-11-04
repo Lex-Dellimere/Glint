@@ -110,15 +110,28 @@ export fn glint_internal_setup(ctx: GlintContext*, cfg: GlintConfig*, glint_getp
 export fn glint_internal_make_fbo(ctx: GlintContext*, w: int32, h: int32, samples: int32) -> bool {
   if (ctx->fbo != 0) {
     glDeleteFramebuffers(1, &ctx->fbo);
-    glDeleteRenderbuffers(1, &ctx->fbo_color);
+    if (ctx->fbo_tex) { glDeleteTextures(1, &ctx->fbo_color); } else { glDeleteRenderbuffers(1, &ctx->fbo_color); }
     glDeleteRenderbuffers(1, &ctx->fbo_depth);
   }
   glGenFramebuffers(1, &ctx->fbo);
   glBindFramebuffer(GL_FRAMEBUFFER, ctx->fbo);
-  glGenRenderbuffers(1, &ctx->fbo_color);
-  glBindRenderbuffer(GL_RENDERBUFFER, ctx->fbo_color);
-  glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, w, h);
-  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, ctx->fbo_color);
+  if (ctx->fbo_tex) {
+    // A texture, so a context that shares objects with this one can draw it.
+    glGenTextures(1, &ctx->fbo_color);
+    glBindTexture(GL_TEXTURE_2D, ctx->fbo_color);
+    glTexImage2D(GL_TEXTURE_2D, 0, (int32)GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, (rawptr)0);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, (int32)GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, (int32)GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, (int32)GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, (int32)GL_CLAMP_TO_EDGE);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, ctx->fbo_color, 0);
+  } else {
+    glGenRenderbuffers(1, &ctx->fbo_color);
+    glBindRenderbuffer(GL_RENDERBUFFER, ctx->fbo_color);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, w, h);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, ctx->fbo_color);
+  }
   glGenRenderbuffers(1, &ctx->fbo_depth);
   glBindRenderbuffer(GL_RENDERBUFFER, ctx->fbo_depth);
   glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, w, h);
@@ -136,6 +149,13 @@ export fn glint_internal_make_fbo(ctx: GlintContext*, w: int32, h: int32, sample
 // The framebuffer to bind when you mean "the screen": 0 for windows, the
 // off-screen one for headless contexts.
 export fn glint_framebuffer(ctx: GlintContext*) -> uint32 { return ctx->fbo; }
+
+// The colour texture of a context made with glint_open_shared (0 otherwise).
+// The parent context can bind it like any texture. Rows are bottom-up, as in GL.
+export fn glint_color_texture(ctx: GlintContext*) -> uint32 {
+  if (!ctx->fbo_tex) { return 0; }
+  return ctx->fbo_color;
+}
 
 export fn glint_width(ctx: GlintContext*) -> int32 { return ctx->width; }
 export fn glint_height(ctx: GlintContext*) -> int32 { return ctx->height; }
@@ -161,6 +181,21 @@ export fn glint_has_ext(name: string) -> bool {
   return false;
 }
 
+// Is `word` one of the space-separated names in `list`?
+export fn glint_internal_has_word(list: cstring, word: string) -> bool {
+  if (list == 0) { return false; }
+  var n: int64 = (int64)word.length;
+  var i: int64 = 0;
+  while (list[i] != 0) {
+    var j: int64 = 0;
+    while (j < n && list[i + j] == (uint8)word[j]) { j += 1; }
+    if (j == n && (list[i + n] == 0 || list[i + n] == 32)) { return true; }
+    while (list[i] != 0 && list[i] != 32) { i += 1; }
+    while (list[i] == 32) { i += 1; }
+  }
+  return false;
+}
+
 export fn glint_internal_cstr_is(c: cstring, s: string) -> bool {
   var n: int64 = (int64)s.length;
   for i in 0..n {
@@ -171,24 +206,39 @@ export fn glint_internal_cstr_is(c: cstring, s: string) -> bool {
 
 // ---- pixels ----
 
-// Read the whole drawable as RGBA8, top row first. out must hold width*height*4 bytes.
-export fn glint_read_rgba(ctx: GlintContext*, out: uint8*) {
-  var w: int32 = ctx->width;
-  var h: int32 = ctx->height;
+// Read a rectangle of the drawable, top row first. (x, y) is its top-left
+// corner, from the top-left of the drawable. format is GLINT_FORMAT_RGBA or
+// GLINT_FORMAT_BGRA. stride is the bytes from one row of `out` to the next
+// (0 means w * 4; it must be a multiple of 4), so you can read straight into a
+// tile of a bigger image.
+export fn glint_read_rect(ctx: GlintContext*, x: int32, y: int32, w: int32, h: int32, format: int32, out: uint8*, stride: int32) {
+  var st: int32 = stride;
+  if (st == 0) { st = w * 4; }
   glBindFramebuffer(GL_READ_FRAMEBUFFER, ctx->fbo);
-  glPixelStorei(GL_PACK_ALIGNMENT, 1);
-  glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, (rawptr)out);
-  // GL rows are bottom-up: flip in place.
+  glPixelStorei(GL_PACK_ALIGNMENT, 4);
+  glPixelStorei(GL_PACK_ROW_LENGTH, st / 4);
+  if (format == GLINT_FORMAT_BGRA) {
+    glReadPixels(x, ctx->height - y - h, w, h, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, (rawptr)out);
+  } else {
+    glReadPixels(x, ctx->height - y - h, w, h, GL_RGBA, GL_UNSIGNED_BYTE, (rawptr)out);
+  }
+  glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+  // GL rows are bottom-up: flip the rectangle in place.
   var row: int64 = (int64)w * 4;
   var tmp: uint8* = (uint8*)malloc(row);
-  for y in 0..(h / 2) {
-    var a: uint8* = out + (int64)y * row;
-    var b: uint8* = out + (int64)(h - 1 - y) * row;
+  for r in 0..(h / 2) {
+    var a: uint8* = out + (int64)r * (int64)st;
+    var b: uint8* = out + (int64)(h - 1 - r) * (int64)st;
     memcpy((rawptr)tmp, (rawptr)a, row);
     memcpy((rawptr)a, (rawptr)b, row);
     memcpy((rawptr)b, (rawptr)tmp, row);
   }
   free((rawptr)tmp);
+}
+
+// Read the whole drawable as RGBA8, top row first. out must hold width*height*4 bytes.
+export fn glint_read_rgba(ctx: GlintContext*, out: uint8*) {
+  glint_read_rect(ctx, 0, 0, ctx->width, ctx->height, GLINT_FORMAT_RGBA, out, 0);
 }
 
 // One pixel as 0xAARRGGBB; (x, y) counted from the top-left.

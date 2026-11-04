@@ -120,7 +120,17 @@ export struct GlintContext {
   ev: GlintEvent[64];
   ev_head: int32;
   ev_count: int32;
+  // added after 0.1.0 (append only)
+  egl_cfg: rawptr;          // the EGL config, for shared contexts
+  glx_fbc: rawptr;          // the GLX FBConfig, for shared contexts
+  fbo_tex: bool;            // headless colour buffer is a texture (shared contexts)
+  borrowed: bool;           // x_dpy belongs to another context: don't close it
+  share: GlintContext*;     // while opening: the context to share objects with
 }
+
+// Pixel formats for glint_read_rect.
+export const GLINT_FORMAT_RGBA: int32 = 0;   // bytes R, G, B, A
+export const GLINT_FORMAT_BGRA: int32 = 1;   // bytes B, G, R, A (Windows DIBs, X11 32-bit visuals)
 
 // The settings Glint uses when you pass none.
 export fn glint_config() -> GlintConfig {

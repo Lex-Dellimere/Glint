@@ -70,6 +70,42 @@ fn main() -> int32 {
   glint_read_rgba(c, px);
   check("readback after resize", px[0] == 255 && px[1] == 0 && px[(48 * 16 - 1) * 4] == 255);
   free((rawptr)px);
+
+  // a BGRA sub-rectangle into a wider buffer: green 8x4 block at the top-left
+  glEnable(GL_SCISSOR_TEST);
+  glScissor(0, 12, 8, 4);
+  glClearColor(0.0, 1.0, 0.0, 1.0);
+  glClear(GL_COLOR_BUFFER_BIT);
+  glDisable(GL_SCISSOR_TEST);
+  var tile: uint8[256];               // 4 rows of 64 bytes (16 pixels), we fill 8x4
+  glint_read_rect(c, 4, 2, 8, 4, GLINT_FORMAT_BGRA, &tile[0], 64);
+  check("rect: (4,2) is green in BGRA", tile[0] == 0 && tile[1] == 255 && tile[2] == 0 && tile[3] == 255);
+  check("rect: (8,2) is red in BGRA", tile[16] == 0 && tile[17] == 0 && tile[18] == 255);
+  check("rect: (4,4) is red, next row at stride", tile[128 + 2] == 255 && tile[128 + 1] == 0);
+  check("rect: (4,3) green", tile[64 + 1] == 255);
+
+  // a shared context draws into a texture the parent can use
+  var s: GlintContext* = glint_open_shared(c, 16, 16);
+  check("open shared", s != 0);
+  if (s != 0) {
+    glClearColor(0.0, 0.0, 1.0, 1.0);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glFinish();
+    var tex: uint32 = glint_color_texture(s);
+    check("shared has a colour texture", tex != 0);
+    check("back to the parent", glint_make_current(c));
+    var fb: uint32 = 0;
+    glGenFramebuffers(1, &fb);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, fb);
+    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+    var p4: uint8[4];
+    glReadPixels(3, 3, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, (rawptr)&p4[0]);
+    check("parent sees the shared texture (blue)", p4[0] == 0 && p4[2] == 255);
+    glDeleteFramebuffers(1, &fb);
+    glint_close(s);
+    glint_make_current(c);
+  }
+  check("headless buffer age", glint_buffer_age(c) == 1);
   check("make current again", glint_make_current(c));
   glint_close(c);
 

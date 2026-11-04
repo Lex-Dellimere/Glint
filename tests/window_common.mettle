@@ -41,9 +41,44 @@ export fn own_window(backend: int32, label: string) {
   draw_check(ctx, label);
   var ev: GlintEvent;
   while (glint_poll(ctx, &ev)) { }
+  var age: int32 = glint_buffer_age(ctx);
+  var r: int32[4] = [10, 10, 20, 20];
+  glClear(GL_COLOR_BUFFER_BIT);
+  var dmg: bool = glint_swap_damage(ctx, &r[0], 1);
+  println("     buffer age {age}, damage swap {dmg}");
+  check("{label}: damage swap leaves no GL error", glGetError() == 0 && age >= 0);
+  var sh: GlintContext* = glint_open_shared(ctx, 8, 8);
+  check("{label}: shared context", sh != 0);
+  if (sh != 0) {
+    glClearColor(1.0, 1.0, 0.0, 1.0);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glFinish();
+    var tex: uint32 = glint_color_texture(sh);
+    check("{label}: back to the window context", glint_make_current(ctx));
+    var fb: uint32 = 0;
+    glGenFramebuffers(1, &fb);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, fb);
+    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+    var p4: uint8[4];
+    glReadPixels(1, 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, (rawptr)&p4[0]);
+    check("{label}: window context sees the shared texture", p4[0] == 255 && p4[1] == 255 && p4[2] == 0);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    glDeleteFramebuffers(1, &fb);
+    glint_close(sh);
+    glint_make_current(ctx);
+  }
   check("{label}: resize", glint_resize(ctx, 200, 150));
   glint_set_vsync(ctx, 0);
   glint_close(ctx);
+}
+
+// A window handle that does not exist must fail with 0, not end the program.
+export fn bad_handle(backend: int32, label: string, handle: int64) {
+  var cfg: GlintConfig = glint_config();
+  cfg.backend = backend;
+  var ctx: GlintContext* = glint_open_existing(handle, &cfg);
+  check("{label}: bad handle returns 0", ctx == 0);
+  if (ctx != 0) { glint_close(ctx); }
 }
 
 export fn existing_window(backend: int32, label: string, handle: int64) {
