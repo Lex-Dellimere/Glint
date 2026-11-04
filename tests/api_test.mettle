@@ -1,0 +1,83 @@
+// The loader and the helpers: function counts, versions, extensions,
+// debug output, a 4.5 DSA path, glint_getproc, shaders and errors.
+import "std/io";
+import "glint/glint";
+
+var fails: int32 = 0;
+var debug_msgs: int32 = 0;
+
+fn check(name: string, ok: bool) {
+  if (ok) { println("ok   {name}"); } else { print("FAIL {name}: "); print_cstr(glint_error()); println(""); fails += 1; }
+}
+
+fn on_debug(source: uint32, kind: uint32, id: uint32, severity: uint32, len: int32, msg: cstring, user: rawptr) {
+  debug_msgs += 1;
+}
+
+fn main() -> int32 {
+  var cfg: GlintConfig = glint_config();
+  cfg.debug = true;
+  var c: GlintContext* = glint_open_headless(32, 32, &cfg);
+  check("open headless debug context", c != 0);
+  if (c == 0) { return 1; }
+  print("     GL {c->gl_major}.{c->gl_minor} ");
+  print_cstr(glGetString(GL_VERSION));
+  println("");
+  check("GL 4.5 or newer", glint_gl_version(c) >= 45);
+  check("{GLINT_GL_FUNCTION_COUNT} core functions declared", GLINT_GL_FUNCTION_COUNT == 657);
+  // Every 4.5 function must be there; 4.6 adds 4 (glSpecializeShader and friends).
+  var miss: int32 = glint_load_gl(&glint_getproc);
+  check("core functions missing: {miss}", miss == 0 || (glint_gl_version(c) == 45 && miss <= 4));
+  check("glint_getproc finds glClear", glint_getproc("glClear") != 0);
+  check("has GL_KHR_debug", glint_has_ext("GL_KHR_debug"));
+  check("no such extension", !glint_has_ext("GL_GLINT_no_such_thing"));
+  check("no prefix match", !glint_has_ext("GL_KHR"));
+  check("{GLINT_EXT_COUNT} extension names", GLINT_EXT_COUNT > 300 && GLINT_EXT_NAMES[0].length > 3);
+
+  // debug output: an invalid enum must reach our callback
+  glEnable(GL_DEBUG_OUTPUT);
+  glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
+  glDebugMessageCallback(&on_debug, (rawptr)0);
+  glEnable(0x7FFF);
+  check("GL error reported", glGetError() == GL_INVALID_ENUM);
+  check("debug callback ran ({debug_msgs})", debug_msgs > 0);
+
+  // DSA (4.5): make a buffer, fill it, read it back
+  var buf: uint32 = 0;
+  glCreateBuffers(1, &buf);
+  var src: uint32[4] = [1, 2, 3, 0xDEADBEEF];
+  glNamedBufferData(buf, 16, (rawptr)&src[0], GL_STATIC_DRAW);
+  var dst: uint32[4];
+  glGetNamedBufferSubData(buf, 0, 16, (rawptr)&dst[0]);
+  check("DSA buffer round trip", dst[3] == 0xDEADBEEF && dst[1] == 2);
+  glDeleteBuffers(1, &buf);
+
+  // shader helpers
+  var bad: uint32 = glint_shader(GL_FRAGMENT_SHADER, "#version 330 core\nvoid main() {{ nope(); }\n");
+  check("bad shader gives 0", bad == 0);
+  check("bad shader log is in glint_error", glint_error()[0] != 0);
+  var p: uint32 = glint_program("#version 330 core\nvoid main() {{ gl_Position = vec4(0.0); }\n",
+                                "#version 330 core\nout vec4 o;\nuniform vec4 col;\nvoid main() {{ o = col; }\n");
+  check("good program links", p != 0);
+  check("uniform found", glint_uniform(p, "col") >= 0);
+
+  // resize the headless framebuffer and read it back
+  check("resize headless", glint_resize(c, 48, 16));
+  glViewport(0, 0, 48, 16);
+  glClearColor(1.0, 0.0, 0.0, 1.0);
+  glClear(GL_COLOR_BUFFER_BIT);
+  var px: uint8* = (uint8*)malloc(48 * 16 * 4);
+  glint_read_rgba(c, px);
+  check("readback after resize", px[0] == 255 && px[1] == 0 && px[(48 * 16 - 1) * 4] == 255);
+  free((rawptr)px);
+  check("make current again", glint_make_current(c));
+  glint_close(c);
+
+  // asking for more than the driver has fails cleanly
+  var hi: GlintConfig = glint_config();
+  hi.major = 9; hi.minor = 9; hi.want_major = 9; hi.want_minor = 9;
+  var none: GlintContext* = glint_open_headless(8, 8, &hi);
+  check("GL 9.9 is refused", none == 0);
+  if (fails != 0) { println("{fails} failed"); return 1; }
+  return 0;
+}

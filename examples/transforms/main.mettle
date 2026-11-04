@@ -1,0 +1,7 @@
+import "glint/glint";
+import "../common/ex_run";
+import "scene";
+
+fn main(argc: int32, argv: cstring*) -> int32 {
+  return ex_run(argc, argv, "Glint: transformations", &transforms_setup, &transforms_draw);
+}

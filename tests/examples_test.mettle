@@ -1,0 +1,58 @@
+// Draw each LearnOpenGL example headless and check a few pixels.
+import "std/io";
+import "glint/glint";
+import "../examples/triangle/scene";
+import "../examples/textures/scene";
+import "../examples/transforms/scene";
+import "../examples/lighting/scene";
+
+var fails: int32 = 0;
+
+fn rgb(c: GlintContext*, x: int32, y: int32) -> uint32 { return glint_read_pixel(c, x, y) & 0xFFFFFF; }
+
+fn close_to(a: uint32, b: uint32) -> bool {
+  for s in 0..3 {
+    var sh: uint32 = (uint32)(s * 8);
+    var d: int32 = (int32)((a >> sh) & 255) - (int32)((b >> sh) & 255);
+    if (d < -4 || d > 4) { return false; }
+  }
+  return true;
+}
+
+fn check(name: string, ok: bool) {
+  if (ok) { println("ok   {name}"); } else { println("FAIL {name}"); fails += 1; }
+}
+
+fn main() -> int32 {
+  var c: GlintContext* = glint_open_headless(800, 600, (GlintConfig*)0);
+  if (c == 0) { print("FAIL open: "); print_cstr(glint_error()); println(""); return 1; }
+  var teal: uint32 = 0x334C4C;      // (0.2, 0.3, 0.3)
+
+  check("triangle setup", triangle_setup());
+  triangle_draw(c, 1.0);
+  check("triangle: orange middle", close_to(rgb(c, 400, 300), 0xFF7F33));
+  check("triangle: teal corner", close_to(rgb(c, 5, 5), teal));
+
+  check("textures setup", textures_setup());
+  textures_draw(c, 1.0);
+  check("textures: quad drawn in the middle", !close_to(rgb(c, 400, 300), teal));
+  check("textures: teal corner", close_to(rgb(c, 5, 5), teal));
+
+  check("transforms setup", transforms_setup());
+  transforms_draw(c, 1.0);
+  check("transforms: middle is empty (quad moved)", close_to(rgb(c, 400, 300), teal));
+  check("transforms: quad at lower right", !close_to(rgb(c, 600, 450), teal));
+
+  check("lighting setup", lighting_setup());
+  lighting_draw(c, 1.0);
+  var mid: uint32 = rgb(c, 400, 300);
+  var r: uint32 = (mid >> 16) & 255;
+  var g: uint32 = (mid >> 8) & 255;
+  var b: uint32 = mid & 255;
+  check("lighting: lit coral cube (r > g > b)", r > 120 && r > g && g > b);
+  check("lighting: dark corner", close_to(rgb(c, 5, 5), 0x191919));
+  check("no GL error", glGetError() == 0);
+  glint_close(c);
+  if (fails != 0) { println("{fails} failed"); return 1; }
+  return 0;
+}

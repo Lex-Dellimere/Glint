@@ -1,6 +1,24 @@
+// @@project@@: a window with an OpenGL context, made with @@package@@ @@package_version@@.
+// Press Escape or close the window to quit.
 import "std/io";
+import "glint/glint";
 
 fn main() -> int32 {
-  print("Hello from @@project@@, built on @@package@@ @@package_version@@!\n");
+  var ctx: GlintContext* = glint_open_window("@@project@@", 800, 600, (GlintConfig*)0);
+  if (ctx == 0) { print_cstr(glint_error()); println(""); return 1; }
+  print("GL {ctx->gl_major}.{ctx->gl_minor} through {glint_backend_name(ctx)}: ");
+  print_cstr(glGetString(GL_RENDERER));
+  println("");
+  var ev: GlintEvent;
+  while (!glint_should_close(ctx)) {
+    while (glint_poll(ctx, &ev)) {
+      if (ev.kind == GLINT_EV_KEY_DOWN && ev.key == GLINT_KEY_ESCAPE) { glint_set_should_close(ctx, true); }
+      if (ev.kind == GLINT_EV_RESIZE) { glViewport(0, 0, ev.w, ev.h); }
+    }
+    glClearColor(0.2, 0.3, 0.3, 1.0);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glint_swap(ctx);
+  }
+  glint_close(ctx);
   return 0;
 }

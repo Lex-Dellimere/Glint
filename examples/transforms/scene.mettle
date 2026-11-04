@@ -1,0 +1,26 @@
+// LearnOpenGL "Transformations": the textured quad, moved to the lower right
+// and spun around z over time with a matrix uniform.
+import "glint/glint";
+import "glint/glint_math";
+import "../common/ex_run";
+import "../textures/scene";
+
+var prog: uint32 = 0;
+var vao: uint32 = 0;
+var tex1: uint32 = 0;
+var tex2: uint32 = 0;
+
+export fn transforms_setup() -> bool {
+  return textures_make(textures_vs(), textures_fs(), &prog, &vao, &tex1, &tex2);
+}
+
+export fn transforms_draw(ctx: GlintContext*, t: float32) {
+  glClearColor(0.2, 0.3, 0.3, 1.0);
+  glClear(GL_COLOR_BUFFER_BIT);
+  textures_bind(prog, tex1, tex2);
+  var m: GlintMat4 = glint_mat4_mul(glint_mat4_translate(glint_vec3(0.5, -0.5, 0.0)),
+                                    glint_mat4_rotate(t, glint_vec3(0.0, 0.0, 1.0)));
+  ex_set_mat4(prog, "transform", &m);
+  glBindVertexArray(vao);
+  glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, (rawptr)0);
+}

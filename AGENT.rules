@@ -1,9 +1,30 @@
 # glint: notes for AI coding agents (plain text, shipped with the package)
 
 ## What it is for
+OpenGL 4.6 for Mettle: every core function and enum (generated from Khronos gl.xml),
+ARB/KHR/EXT extensions, and contexts on Linux (EGL, GLX) and Windows (WGL):
+own window, an existing window (X11 window id / HWND), or headless.
 
 ## Main API
+import "glint/glint" (math: "glint/glint_math"). Full list: docs/api.md.
+- glint_open_window(title, w, h, cfg) / glint_open_existing(handle, cfg) / glint_open_headless(w, h, cfg)
+  return GlintContext* (current) or 0; glint_error() says why. cfg may be (GlintConfig*)0.
+- loop: while (glint_poll(ctx, &ev)) {...}; draw; glint_swap(ctx). glint_close(ctx) at the end.
+- GL calls keep C names: glClear(GL_COLOR_BUFFER_BIT). GLenum = uint32, GLint = int32,
+  GLboolean = uint8, const GLchar* = cstring, void* = rawptr.
+- glint_has_ext("GL_ARB_...") before calling an extension function.
+- glint_program(vs, fs) -> uint32 (0 on error, log in glint_error()).
+- headless: bind glint_framebuffer(ctx) where you would bind 0; glint_read_rgba reads pixels top-down.
 
 ## Conventions
+- Every Glint export is glint_* / Glint* / GLINT_*. GL keeps gl* / GL_*. Don't declare names like these yourself.
+- Callback parameters are named *_cb (a Mettle compiler bug resolves fn-pointer params named like a function).
 
 ## Traps
+- In Mettle strings "{" interpolates: write "{{" for a GLSL brace: "void main() {{ ... }".
+- GLint params that take enums need a cast: glTexParameteri(t, GL_TEXTURE_MIN_FILTER, (int32)GL_LINEAR).
+- GL_FALSE for a GLboolean param is (uint8)0.
+- Never call a GL function before a context exists: they are 0 until then.
+- On Linux the driver may return a stub for a missing extension; check glint_has_ext, not the pointer.
+- Tests with windows must use a private Xvfb (see tests/xvfb.mettle), never the user's DISPLAY.
+- src/glint_gl.mettle and src/glint_ext.mettle are generated: edit tools/glgen.py and run `mbuild gen`.

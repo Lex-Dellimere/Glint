@@ -1,0 +1,68 @@
+// The loop every example shares. `prog` opens a window and draws until you
+// close it or press Escape. `prog --headless out.ppm` draws one frame at t = 1 s
+// without a window and saves it, which is what the tests use.
+import "std/io";
+import "glint/glint";
+import "glint/glint_math";
+
+export fn ex_run(argc: int32, argv: cstring*, title: string,
+                 ex_setup_cb: fn() -> bool, ex_draw_cb: fn(GlintContext*, float32) -> void) -> int32 {
+  if (argc >= 3 && glint_internal_cstr_is(argv[1], "--headless")) {
+    var h: GlintContext* = glint_open_headless(800, 600, (GlintConfig*)0);
+    if (h == 0) { print("error: "); print_cstr(glint_error()); println(""); return 1; }
+    if (!ex_setup_cb()) { print("error: "); print_cstr(glint_error()); println(""); return 1; }
+    ex_draw_cb(h, 1.0);
+    var px: uint8* = (uint8*)malloc(800 * 600 * 4);
+    glint_read_rgba(h, px);
+    glint_write_ppm(argv[2], 800, 600, px);
+    free((rawptr)px);
+    glint_close(h);
+    return 0;
+  }
+  var cfg: GlintConfig = glint_config();
+  cfg.debug = true;
+  var ctx: GlintContext* = glint_open_window(title, 800, 600, &cfg);
+  if (ctx == 0) { print("error: "); print_cstr(glint_error()); println(""); return 1; }
+  glint_enable_debug_output();
+  print("{title}: {glint_backend_name(ctx)}, GL {ctx->gl_major}.{ctx->gl_minor}, ");
+  print_cstr(glGetString(GL_RENDERER));
+  println("");
+  if (!ex_setup_cb()) { print("error: "); print_cstr(glint_error()); println(""); return 1; }
+  var t0: float64 = glint_time();
+  var ev: GlintEvent;
+  while (!glint_should_close(ctx)) {
+    while (glint_poll(ctx, &ev)) {
+      if (ev.kind == GLINT_EV_KEY_DOWN && ev.key == GLINT_KEY_ESCAPE) { glint_set_should_close(ctx, true); }
+      if (ev.kind == GLINT_EV_RESIZE) { glViewport(0, 0, ev.w, ev.h); }
+    }
+    ex_draw_cb(ctx, (float32)(glint_time() - t0));
+    glint_swap(ctx);
+  }
+  glint_close(ctx);
+  return 0;
+}
+
+// Make a VAO + VBO from interleaved floats. `layout` lists the float count of
+// each attribute in order, e.g. [3, 2] for position + texture coordinate.
+export fn ex_mesh(data: float32*, floats: int32, layout: int32*, nattr: int32) -> uint32 {
+  var vao: uint32 = 0;
+  var vbo: uint32 = 0;
+  glGenVertexArrays(1, &vao);
+  glBindVertexArray(vao);
+  glGenBuffers(1, &vbo);
+  glBindBuffer(GL_ARRAY_BUFFER, vbo);
+  glBufferData(GL_ARRAY_BUFFER, (int64)floats * 4, (rawptr)data, GL_STATIC_DRAW);
+  var stride: int32 = 0;
+  for i in 0..nattr { stride += layout[i]; }
+  var off: int32 = 0;
+  for i in 0..nattr {
+    glVertexAttribPointer((uint32)i, layout[i], GL_FLOAT, (uint8)0, stride * 4, (rawptr)(int64)(off * 4));
+    glEnableVertexAttribArray((uint32)i);
+    off += layout[i];
+  }
+  return vao;
+}
+
+export fn ex_set_mat4(prog: uint32, name: cstring, m: GlintMat4*) {
+  glUniformMatrix4fv(glGetUniformLocation(prog, name), 1, (uint8)0, &m->m[0]);
+}

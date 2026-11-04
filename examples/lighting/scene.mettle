@@ -1,0 +1,92 @@
+// LearnOpenGL "Basic Lighting": a coral cube lit by a white lamp with the Phong
+// model (ambient + diffuse + specular), seen by a camera that circles it.
+// The lamp itself is a small white cube drawn with a second program.
+import "glint/glint";
+import "glint/glint_math";
+import "../common/ex_run";
+
+var obj_prog: uint32 = 0;
+var lamp_prog: uint32 = 0;
+var vao: uint32 = 0;
+
+fn lighting_vs() -> string {
+  return "#version 330 core\nlayout (location = 0) in vec3 aPos;\nlayout (location = 1) in vec3 aNormal;\nout vec3 FragPos;\nout vec3 Normal;\nuniform mat4 model;\nuniform mat4 view;\nuniform mat4 projection;\nvoid main() {{\n  FragPos = vec3(model * vec4(aPos, 1.0));\n  Normal = mat3(transpose(inverse(model))) * aNormal;\n  gl_Position = projection * view * vec4(FragPos, 1.0);\n}\n";
+}
+
+fn lighting_fs() -> string {
+  return "#version 330 core\nout vec4 FragColor;\nin vec3 Normal;\nin vec3 FragPos;\nuniform vec3 lightPos;\nuniform vec3 viewPos;\nuniform vec3 lightColor;\nuniform vec3 objectColor;\nvoid main() {{\n  vec3 ambient = 0.1 * lightColor;\n  vec3 norm = normalize(Normal);\n  vec3 lightDir = normalize(lightPos - FragPos);\n  vec3 diffuse = max(dot(norm, lightDir), 0.0) * lightColor;\n  vec3 viewDir = normalize(viewPos - FragPos);\n  vec3 reflectDir = reflect(-lightDir, norm);\n  vec3 specular = 0.5 * pow(max(dot(viewDir, reflectDir), 0.0), 32.0) * lightColor;\n  FragColor = vec4((ambient + diffuse + specular) * objectColor, 1.0);\n}\n";
+}
+
+fn lamp_fs() -> string {
+  return "#version 330 core\nout vec4 FragColor;\nvoid main() {{ FragColor = vec4(1.0); }\n";
+}
+
+// A unit cube as 36 vertices of position + normal, built face by face.
+fn make_cube() -> uint32 {
+  // per face: normal, u axis, v axis (u x v = normal, so triangles wind outward)
+  var f: float32[54] = [
+     1.0, 0.0, 0.0,   0.0, 0.0, -1.0,  0.0, 1.0, 0.0,
+    -1.0, 0.0, 0.0,   0.0, 0.0, 1.0,   0.0, 1.0, 0.0,
+     0.0, 1.0, 0.0,   1.0, 0.0, 0.0,   0.0, 0.0, -1.0,
+     0.0, -1.0, 0.0,  1.0, 0.0, 0.0,   0.0, 0.0, 1.0,
+     0.0, 0.0, 1.0,   1.0, 0.0, 0.0,   0.0, 1.0, 0.0,
+     0.0, 0.0, -1.0, -1.0, 0.0, 0.0,   0.0, 1.0, 0.0];
+  var su: float32[6] = [-0.5, 0.5, 0.5, 0.5, -0.5, -0.5];
+  var sv: float32[6] = [-0.5, -0.5, 0.5, 0.5, 0.5, -0.5];
+  var v: float32[216];
+  var k: int32 = 0;
+  for face in 0..6 {
+    var b: int32 = face * 9;
+    for c in 0..6 {
+      for axis in 0..3 {
+        v[k + axis] = f[b + axis] * 0.5 + f[b + 3 + axis] * su[c] + f[b + 6 + axis] * sv[c];
+        v[k + 3 + axis] = f[b + axis];
+      }
+      k += 6;
+    }
+  }
+  var layout: int32[2] = [3, 3];
+  return ex_mesh(&v[0], 216, &layout[0], 2);
+}
+
+export fn lighting_setup() -> bool {
+  obj_prog = glint_program(lighting_vs(), lighting_fs());
+  if (obj_prog == 0) { return false; }
+  lamp_prog = glint_program(lighting_vs(), lamp_fs());
+  if (lamp_prog == 0) { return false; }
+  vao = make_cube();
+  glEnable(GL_DEPTH_TEST);
+  return true;
+}
+
+fn set_vec3(p: uint32, name: cstring, v: GlintVec3) {
+  glUniform3f(glGetUniformLocation(p, name), v.x, v.y, v.z);
+}
+
+export fn lighting_draw(ctx: GlintContext*, t: float32) {
+  glClearColor(0.1, 0.1, 0.1, 1.0);
+  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+  var a: float32 = t * 0.5;
+  var eye: GlintVec3 = glint_vec3(4.0 * glint_sin(a), 1.5, 4.0 * glint_cos(a));
+  var light: GlintVec3 = glint_vec3(1.2, 1.0, 2.0);
+  var aspect: float32 = (float32)ctx->width / (float32)ctx->height;
+  var proj: GlintMat4 = glint_mat4_perspective(glint_radians(45.0), aspect, 0.1, 100.0);
+  var view: GlintMat4 = glint_mat4_look_at(eye, glint_vec3(0.0, 0.0, 0.0), glint_vec3(0.0, 1.0, 0.0));
+  var model: GlintMat4 = glint_mat4_identity();
+  glUseProgram(obj_prog);
+  set_vec3(obj_prog, "objectColor", glint_vec3(1.0, 0.5, 0.31));
+  set_vec3(obj_prog, "lightColor", glint_vec3(1.0, 1.0, 1.0));
+  set_vec3(obj_prog, "lightPos", light);
+  set_vec3(obj_prog, "viewPos", eye);
+  ex_set_mat4(obj_prog, "projection", &proj);
+  ex_set_mat4(obj_prog, "view", &view);
+  ex_set_mat4(obj_prog, "model", &model);
+  glBindVertexArray(vao);
+  glDrawArrays(GL_TRIANGLES, 0, 36);
+  var lm: GlintMat4 = glint_mat4_mul(glint_mat4_translate(light), glint_mat4_scale(glint_vec3(0.2, 0.2, 0.2)));
+  glUseProgram(lamp_prog);
+  ex_set_mat4(lamp_prog, "projection", &proj);
+  ex_set_mat4(lamp_prog, "view", &view);
+  ex_set_mat4(lamp_prog, "model", &lm);
+  glDrawArrays(GL_TRIANGLES, 0, 36);
+}
