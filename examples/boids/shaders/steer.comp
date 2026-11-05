@@ -1,0 +1,70 @@
+#version 430 core
+// Step 4: the boids rules. Each boid looks at the boids in the 27 cells around it:
+// separation (don't crowd), alignment (fly the same way), cohesion (stay together),
+// plus staying inside the box and fleeing the predator.
+layout(local_size_x = 256) in;
+#include "common.glsl"
+uniform float uDt;
+uniform float uSeparation;
+uniform float uAlignment;
+uniform float uCohesion;
+uniform float uMinSpeed;
+uniform float uMaxSpeed;
+uniform vec3 uPredator;
+uniform float uPredatorOn;
+
+void main() {
+  uint i = gl_GlobalInvocationID.x;
+  if (i >= uCount) { return; }
+  vec3 p = posB[i].xyz;
+  vec3 v = velB[i].xyz;
+  ivec3 c = cellOf(p);
+  vec3 sep = vec3(0.0);
+  vec3 ali = vec3(0.0);
+  vec3 coh = vec3(0.0);
+  float n = 0.0;
+  float r2 = uRadius * uRadius;
+  float sepR2 = r2 * 0.25;
+  int seen = 0;
+  for (int dz = -1; dz <= 1; dz++)
+  for (int dy = -1; dy <= 1; dy++)
+  for (int dx = -1; dx <= 1; dx++) {
+    ivec3 cc = c + ivec3(dx, dy, dz);
+    if (any(lessThan(cc, ivec3(0))) || any(greaterThanEqual(cc, ivec3(uGrid)))) { continue; }
+    uint ci = cellIndex(cc);
+    uint s = cellStart[ci];
+    uint e = s + min(cellCount[ci], 48u);          // a cap keeps dense flocks fast
+    for (uint j = s; j < e; j++) {
+      if (j == i) { continue; }
+      vec3 d = p - posB[j].xyz;
+      float d2 = dot(d, d);
+      if (d2 < r2 && d2 > 1e-6) {
+        if (d2 < sepR2) { sep += d / d2; }
+        ali += velB[j].xyz;
+        coh += posB[j].xyz;
+        n += 1.0;
+        seen++;
+      }
+    }
+    if (seen > 160) { break; }
+  }
+  vec3 acc = vec3(0.0);
+  if (n > 0.0) {
+    acc += sep * uSeparation;
+    acc += (ali / n - v) * uAlignment;
+    acc += (coh / n - p) * uCohesion;
+  }
+  // a soft wall: steer back in when near the edge of the box
+  vec3 edge = uBox * 0.8 - abs(p);
+  acc += -sign(p) * max(-edge, 0.0) * 2.0;
+  // flee the predator
+  vec3 fp = p - uPredator;
+  float fd = length(fp);
+  if (uPredatorOn > 0.5 && fd < uRadius * 4.0) { acc += normalize(fp) * (uRadius * 4.0 - fd) * 6.0; }
+  v += acc * uDt;
+  float sp = length(v);
+  v = v / max(sp, 1e-5) * clamp(sp, uMinSpeed, uMaxSpeed);
+  p += v * uDt;
+  posA[i] = vec4(p, 1.0);
+  velA[i] = vec4(v, n);                              // w = neighbour count, for colour
+}

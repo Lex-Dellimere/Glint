@@ -1,0 +1,31 @@
+#version 430 core
+// Step 2: where each cell's boids start in the sorted list (an exclusive prefix sum),
+// in one work group: each thread sums a run of cells, then the runs are scanned.
+layout(local_size_x = 1024) in;
+#include "common.glsl"
+shared uint sums[1024];
+void main() {
+  uint t = gl_LocalInvocationID.x;
+  uint cells = uint(uGrid * uGrid * uGrid);
+  uint per = (cells + 1023u) / 1024u;
+  uint first = t * per;
+  uint local_sum = 0u;
+  for (uint k = 0u; k < per; k++) {
+    uint c = first + k;
+    if (c < cells) { local_sum += cellCount[c]; }
+  }
+  sums[t] = local_sum;
+  barrier();
+  for (uint off = 1u; off < 1024u; off <<= 1) {        // Hillis-Steele inclusive scan
+    uint v = 0u;
+    if (t >= off) { v = sums[t - off]; }
+    barrier();
+    sums[t] += v;
+    barrier();
+  }
+  uint run = sums[t] - local_sum;
+  for (uint k = 0u; k < per; k++) {
+    uint c = first + k;
+    if (c < cells) { cellStart[c] = run; run += cellCount[c]; }
+  }
+}

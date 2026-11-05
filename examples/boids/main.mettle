@@ -1,0 +1,254 @@
+// Boids on the GPU: every boid is steered by a compute shader each frame,
+// using a uniform grid so each one only looks at its neighbours, and drawn
+// as a lit arrowhead with one instanced draw call.
+//
+//   mbuild run boids                         # 131072 boids in a window
+//   mbuild run boids -- --boids 500000       # more
+//   mbuild run boids -- --headless out.ppm   # simulate a few seconds, save one frame
+//
+// Drag to orbit, scroll to zoom, R to reset the camera, Space to pause,
+// P to turn the predator on or off, Escape to quit. The shaders are in
+// shaders/: edit and save them while it runs.
+// On a laptop with an NVIDIA GPU behind the main one (PRIME), start it with
+//   __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia GLINT_BACKEND=glx
+import "std/io";
+import "std/mem";
+import "glint/glint_preview";
+
+extern fn bo_getenv(name: cstring) -> cstring = "getenv";
+
+const BOX: float32 = 60.0;
+const RADIUS: float32 = 3.0;
+
+var count_p: GlintProgram* = (GlintProgram*)0;
+var scan_p: GlintProgram* = (GlintProgram*)0;
+var scatter_p: GlintProgram* = (GlintProgram*)0;
+var steer_p: GlintProgram* = (GlintProgram*)0;
+var boid_p: GlintProgram* = (GlintProgram*)0;
+var box_p: GlintProgram* = (GlintProgram*)0;
+var pred_p: GlintProgram* = (GlintProgram*)0;
+var bufs: uint32[8];
+var vao: uint32 = 0;
+var n_boids: int32 = 131072;
+var grid: int32 = 40;
+var paused: bool = false;
+var predator_on: bool = true;
+var sim_time: float32 = 0.0;
+var last: float64 = 0.0;
+var frames: int32 = 0;
+var fps_time: float64 = 0.0;
+var rng: uint32 = 12345;
+
+fn rnd() -> float32 {                       // 0..1, a small xorshift
+  rng = rng ^ (rng << 13);
+  rng = rng ^ (rng >> 17);
+  rng = rng ^ (rng << 5);
+  return (float32)(rng & 16777215) / 16777216.0;
+}
+
+fn prog(dir: string, kind1: uint32, f1: string, kind2: uint32, f2: string) -> GlintProgram* {
+  var p: GlintProgram* = glint_program_new();
+  glint_program_add_file(p, kind1, dir + f1);
+  if (f2.length > (uint64)0) { glint_program_add_file(p, kind2, dir + f2); }
+  if (!glint_program_build(p)) { print_cstr(glint_error()); println(""); }
+  return p;
+}
+
+// The settings every shader that includes common.glsl uses.
+fn set_common(p: GlintProgram*) {
+  var l: int32 = glint_loc(p, "uCount");
+  if (l >= 0) { glProgramUniform1ui(p->id, l, (uint32)n_boids); }
+  glint_set_float(p, "uBox", BOX);
+  glint_set_float(p, "uRadius", RADIUS);
+  glint_set_int(p, "uGrid", grid);
+}
+
+fn make_buffers() {
+  glCreateBuffers(8, &bufs[0]);
+  var n: int64 = (int64)n_boids;
+  var cells: int64 = (int64)grid * (int64)grid * (int64)grid;
+  var pos: float32* = (float32*)malloc(n * 16);
+  var vel: float32* = (float32*)malloc(n * 16);
+  for i in 0..n {
+    pos[i * 4] = (rnd() - 0.5) * BOX;
+    pos[i * 4 + 1] = (rnd() - 0.5) * BOX;
+    pos[i * 4 + 2] = (rnd() - 0.5) * BOX;
+    pos[i * 4 + 3] = 1.0;
+    vel[i * 4] = (rnd() - 0.5) * 20.0;
+    vel[i * 4 + 1] = (rnd() - 0.5) * 20.0;
+    vel[i * 4 + 2] = (rnd() - 0.5) * 20.0;
+    vel[i * 4 + 3] = 0.0;
+  }
+  glNamedBufferData(bufs[0], n * 16, (rawptr)pos, GL_DYNAMIC_COPY);
+  glNamedBufferData(bufs[1], n * 16, (rawptr)vel, GL_DYNAMIC_COPY);
+  glNamedBufferData(bufs[2], n * 16, (rawptr)0, GL_DYNAMIC_COPY);
+  glNamedBufferData(bufs[3], n * 16, (rawptr)0, GL_DYNAMIC_COPY);
+  glNamedBufferData(bufs[4], cells * 4, (rawptr)0, GL_DYNAMIC_COPY);
+  glNamedBufferData(bufs[5], cells * 4, (rawptr)0, GL_DYNAMIC_COPY);
+  glNamedBufferData(bufs[6], n * 4, (rawptr)0, GL_DYNAMIC_COPY);
+  glNamedBufferData(bufs[7], n * 4, (rawptr)0, GL_DYNAMIC_COPY);
+  free((rawptr)pos);
+  free((rawptr)vel);
+  for b in 0..8 { glBindBufferBase(GL_SHADER_STORAGE_BUFFER, (uint32)b, bufs[b]); }
+}
+
+fn predator_at(t: float32) -> GlintVec3 {
+  return glint_vec3(glint_sin(t * 0.31) * BOX * 0.5, glint_sin(t * 0.47) * BOX * 0.35, glint_cos(t * 0.23) * BOX * 0.5);
+}
+
+fn run_pass(p: GlintProgram*, groups: int32) {
+  glint_program_use(p);
+  glDispatchCompute((uint32)groups, 1, 1);
+  glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+}
+
+// One simulation step: count, scan, scatter, steer.
+fn step(dt: float32) {
+  if (count_p->id == 0 || scan_p->id == 0 || scatter_p->id == 0 || steer_p->id == 0) { return; }
+  var groups: int32 = (n_boids + 255) / 256;
+  glClearNamedBufferData(bufs[4], GL_R32UI, GL_RED_INTEGER, GL_UNSIGNED_INT, (rawptr)0);
+  glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+  set_common(count_p); set_common(scan_p); set_common(scatter_p); set_common(steer_p);
+  run_pass(count_p, groups);
+  run_pass(scan_p, 1);
+  run_pass(scatter_p, groups);
+  var pr: GlintVec3 = predator_at(sim_time);
+  glint_set_float(steer_p, "uDt", dt);
+  glint_set_float(steer_p, "uSeparation", 9.0);
+  glint_set_float(steer_p, "uAlignment", 1.6);
+  glint_set_float(steer_p, "uCohesion", 0.9);
+  glint_set_float(steer_p, "uMinSpeed", 9.0);
+  glint_set_float(steer_p, "uMaxSpeed", 22.0);
+  glint_set_vec3(steer_p, "uPredator", pr.x, pr.y, pr.z);
+  var on: float32 = 0.0;
+  if (predator_on) { on = 1.0; }
+  glint_set_float(steer_p, "uPredatorOn", on);
+  run_pass(steer_p, groups);
+  glMemoryBarrier(GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT);
+  sim_time = sim_time + dt;
+}
+
+fn render(pv: GlintPreview*) {
+  glEnable(GL_DEPTH_TEST);
+  glClearColor(0.015, 0.02, 0.045, 1.0);
+  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+  var view: GlintMat4 = glint_preview_view(pv);
+  var proj: GlintMat4 = glint_preview_projection(pv);
+  var eye: GlintVec3 = glint_preview_eye(pv);
+  glBindVertexArray(vao);
+  if (box_p->id != 0) {
+    glint_set_mat4(box_p, "uView", &view.m[0]);
+    glint_set_mat4(box_p, "uProj", &proj.m[0]);
+    glint_set_float(box_p, "uBox", BOX);
+    glint_program_use(box_p);
+    glDrawArrays(GL_LINES, 0, 24);
+  }
+  if (boid_p->id != 0) {
+    set_common(boid_p);
+    glint_set_mat4(boid_p, "uView", &view.m[0]);
+    glint_set_mat4(boid_p, "uProj", &proj.m[0]);
+    glint_set_vec3(boid_p, "uEye", eye.x, eye.y, eye.z);
+    glint_set_float(boid_p, "uSize", 0.45);
+    glint_program_use(boid_p);
+    glDrawArraysInstanced(GL_TRIANGLES, 0, 6, n_boids);
+  }
+  if (predator_on && pred_p->id != 0) {
+    var pr: GlintVec3 = predator_at(sim_time);
+    glEnable(GL_PROGRAM_POINT_SIZE);
+    glint_set_mat4(pred_p, "uView", &view.m[0]);
+    glint_set_mat4(pred_p, "uProj", &proj.m[0]);
+    glint_set_vec3(pred_p, "uPredator", pr.x, pr.y, pr.z);
+    glint_program_use(pred_p);
+    glDrawArrays(GL_POINTS, 0, 1);
+  }
+}
+
+fn frame(pv: GlintPreview*, user: rawptr) -> bool {
+  for i in 0..pv->nevents {
+    var e: GlintEvent = pv->events[i];
+    if (e.kind == GLINT_EV_KEY_DOWN && e.key == GLINT_KEY_SPACE) { paused = !paused; }
+    if (e.kind == GLINT_EV_KEY_DOWN && e.key == 80) { predator_on = !predator_on; }   // P
+  }
+  var now: float64 = glint_time();
+  var dt: float32 = (float32)(now - last);
+  last = now;
+  if (dt > 0.033) { dt = 0.033; }
+  if (!paused) { step(dt); }
+  render(pv);
+  frames += 1;
+  if (now - fps_time >= 1.0) {
+    var fps: int32 = (int32)((float64)frames / (now - fps_time));
+    var s: string = "{n_boids} boids  {fps} fps";
+    if (paused) { s = "{n_boids} boids  paused"; }
+    glint_preview_status(pv, s);
+    frames = 0;
+    fps_time = now;
+  }
+  return true;
+}
+
+fn parse_int(c: cstring) -> int32 {
+  var v: int32 = 0;
+  var i: int32 = 0;
+  while (c[i] >= (uint8)48 && c[i] <= (uint8)57) { v = v * 10 + (int32)(c[i] - (uint8)48); i += 1; }
+  return v;
+}
+
+fn main(argc: int32, argv: cstring*) -> int32 {
+  var headless: cstring = (cstring)0;
+  var a: int32 = 1;
+  while (a < argc) {
+    if (glint_internal_cstr_is(argv[a], "--boids") && a + 1 < argc) { n_boids = parse_int(argv[a + 1]); a += 1; }
+    else if (glint_internal_cstr_is(argv[a], "--headless") && a + 1 < argc) { headless = argv[a + 1]; a += 1; }
+    a += 1;
+  }
+  if (n_boids < 256) { n_boids = 256; }
+  grid = (int32)(2.0 * BOX / RADIUS);
+  var pv: GlintPreview* = (GlintPreview*)0;
+  if (headless != 0) { pv = glint_preview_headless(1280, 720); }
+  else {
+    var cfg: GlintConfig = glint_config();
+    cfg.major = 4; cfg.minor = 3;           // compute shaders
+    var b: cstring = bo_getenv("GLINT_BACKEND");
+    if (b != 0 && glint_internal_cstr_is(b, "glx")) { cfg.backend = GLINT_BACKEND_GLX; }
+    pv = glint_preview_wrap(glint_open_window("Glint boids", 1280, 720, &cfg));
+  }
+  if (pv == 0) { print("error: "); print_cstr(glint_error()); println(""); return 1; }
+  print("{glint_backend_name(pv->ctx)}, GL {pv->ctx->gl_major}.{pv->ctx->gl_minor}: ");
+  print_cstr(glGetString(GL_RENDERER));
+  println(", {n_boids} boids, grid {grid}^3");
+  var dir: string = "examples/boids/shaders/";
+  count_p = prog(dir, GL_COMPUTE_SHADER, "count.comp", 0, "");
+  scan_p = prog(dir, GL_COMPUTE_SHADER, "scan.comp", 0, "");
+  scatter_p = prog(dir, GL_COMPUTE_SHADER, "scatter.comp", 0, "");
+  steer_p = prog(dir, GL_COMPUTE_SHADER, "steer.comp", 0, "");
+  boid_p = prog(dir, GL_VERTEX_SHADER, "boid.vert", GL_FRAGMENT_SHADER, "boid.frag");
+  box_p = prog(dir, GL_VERTEX_SHADER, "box.vert", GL_FRAGMENT_SHADER, "box.frag");
+  pred_p = prog(dir, GL_VERTEX_SHADER, "predator.vert", GL_FRAGMENT_SHADER, "predator.frag");
+  glint_preview_program(pv, count_p); glint_preview_program(pv, scan_p);
+  glint_preview_program(pv, scatter_p); glint_preview_program(pv, steer_p);
+  glint_preview_program(pv, boid_p); glint_preview_program(pv, box_p); glint_preview_program(pv, pred_p);
+  make_buffers();
+  glGenVertexArrays(1, &vao);
+  glint_preview_orbit(pv, glint_vec3(0.0, 0.0, 0.0), 200.0);
+  last = glint_time();
+  fps_time = last;
+  if (headless != 0) {
+    var t0: float64 = glint_time();
+    for i in 0..600 { step(1.0 / 60.0); }
+    glFinish();
+    var t1: float64 = glint_time();
+    println("600 steps in {(int32)((t1 - t0) * 1000.0)} ms ({(int32)((t1 - t0) * 1000000.0 / 600.0)} us a step)");
+    glint_preview_begin(pv);
+    render(pv);
+    glint_preview_end(pv, true);
+    var px: uint8* = (uint8*)malloc(1280 * 720 * 4);
+    glint_read_rgba(pv->ctx, px);
+    glint_write_ppm(headless, 1280, 720, px);
+    free((rawptr)px);
+  } else {
+    glint_preview_run(pv, &frame, (rawptr)0);
+  }
+  glint_preview_close(pv);
+  return 0;
+}

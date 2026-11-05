@@ -1,0 +1,11 @@
+#version 430 core
+// Step 1: count how many boids are in each cell, and remember each boid's place in its cell.
+layout(local_size_x = 256) in;
+#include "common.glsl"
+void main() {
+  uint i = gl_GlobalInvocationID.x;
+  if (i >= uCount) { return; }
+  uint c = cellIndex(cellOf(posA[i].xyz));
+  boidCell[i] = c;
+  boidRank[i] = atomicAdd(cellCount[c], 1u);
+}
