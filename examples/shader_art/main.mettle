@@ -1,0 +1,83 @@
+// Shader art: a raymarched scene drawn by one fragment shader over the whole
+// window. Run it from the project folder:
+//
+//   mbuild run shader_art                       # a window; edit shaders/*.frag|glsl and save
+//   mbuild run shader_art -- --headless out.ppm # one frame, no window
+//
+// Drag to orbit, scroll to zoom, R to reset, Escape to quit.
+// On a laptop with an NVIDIA GPU behind the main one (PRIME), start it with
+//   __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia GLINT_BACKEND=glx
+import "std/io";
+import "std/mem";
+import "glint/glint_preview";
+
+extern fn sa_getenv(name: cstring) -> cstring = "getenv";
+
+var prog: GlintProgram* = (GlintProgram*)0;
+var vao: uint32 = 0;
+var frames: int32 = 0;
+var t_last: float64 = 0.0;
+
+fn draw(pv: GlintPreview*, user: rawptr) -> bool {
+  if (prog->id == 0) { return false; }
+  var eye: GlintVec3 = glint_preview_eye(pv);
+  glint_set_float(prog, "uTime", pv->time);
+  glint_set_vec2(prog, "uRes", (float32)pv->fw, (float32)pv->fh);
+  glint_set_vec3(prog, "uEye", eye.x, eye.y, eye.z);
+  glint_set_vec3(prog, "uTarget", pv->target.x, pv->target.y, pv->target.z);
+  glint_program_use(prog);
+  glBindVertexArray(vao);
+  glDrawArrays(GL_TRIANGLES, 0, 3);
+  frames += 1;
+  var now: float64 = glint_time();
+  if (now - t_last >= 2.0) {
+    var fps: float64 = (float64)frames / (now - t_last);
+    var ms: float64 = 1000.0 / fps;
+    var s: string = "{pv->fw}x{pv->fh}  {(int32)fps} fps  {(int32)(ms * 10.0) / 10}.{(int32)(ms * 10.0) % 10} ms";
+    glint_preview_status(pv, s);
+    free((rawptr)s.chars);
+    frames = 0;
+    t_last = now;
+  }
+  return true;
+}
+
+fn main(argc: int32, argv: cstring*) -> int32 {
+  var headless: bool = argc >= 3 && glint_internal_cstr_is(argv[1], "--headless");
+  var pv: GlintPreview* = (GlintPreview*)0;
+  if (headless) { pv = glint_preview_headless(1280, 720); }
+  else {
+    var cfg: GlintConfig = glint_config();
+    cfg.vsync = 1;
+    var b: cstring = sa_getenv("GLINT_BACKEND");
+    if (b != 0 && glint_internal_cstr_is(b, "glx")) { cfg.backend = GLINT_BACKEND_GLX; }
+    pv = glint_preview_wrap(glint_open_window("Glint shader art", 1280, 720, &cfg));
+  }
+  if (pv == 0) { print("error: "); print_cstr(glint_error()); println(""); return 1; }
+  print("{glint_backend_name(pv->ctx)}, GL {pv->ctx->gl_major}.{pv->ctx->gl_minor}: ");
+  print_cstr(glGetString(GL_RENDERER));
+  println("");
+  prog = glint_program_new();
+  glint_program_add_file(prog, GL_VERTEX_SHADER, "examples/shader_art/shaders/fullscreen.vert");
+  glint_program_add_file(prog, GL_FRAGMENT_SHADER, "examples/shader_art/shaders/scene.frag");
+  glint_program_build(prog);
+  glint_preview_program(pv, prog);
+  glGenVertexArrays(1, &vao);           // the vertex shader makes its own corners
+  glint_preview_orbit(pv, glint_vec3(0.0, 1.0, 0.0), 6.5);
+  t_last = glint_time();
+  if (headless) {
+    pv->t0 = pv->t0 - 3.0;              // a moment in, so the blobs have moved
+    glint_preview_begin(pv);
+    var ok: bool = draw(pv, (rawptr)0);
+    glint_preview_end(pv, ok);
+    var px: uint8* = (uint8*)malloc(1280 * 720 * 4);
+    glint_read_rgba(pv->ctx, px);
+    glint_write_ppm(argv[2], 1280, 720, px);
+    free((rawptr)px);
+  } else {
+    glint_preview_run(pv, &draw, (rawptr)0);
+  }
+  glint_program_free(prog);
+  glint_preview_close(pv);
+  return 0;
+}

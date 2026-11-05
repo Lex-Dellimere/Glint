@@ -15,6 +15,7 @@ fn project() {
   mb_bin("transforms", "examples/transforms/main.mettle");
   mb_bin("lighting", "examples/lighting/main.mettle");
   mb_bin("preview", "examples/preview/main.mettle");
+  mb_bin("shader_art", "examples/shader_art/main.mettle");
   mb_watch("examples/**/shaders/**, examples/preview/color.txt");  // mbuild live reports changes to these
   mb_on("linux");
   mb_link_libs("c");          // dlopen; libEGL, libGL and libX11 load at run time
