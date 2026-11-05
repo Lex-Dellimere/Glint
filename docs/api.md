@@ -90,7 +90,7 @@ In Mettle strings, `{` starts an interpolation, so write `{{` for a literal brac
 | `glint_program(vs: string, fs: string) -> uint32` | Vertex + fragment program from strings. |
 | `glint_program_files(vs_path: string, fs_path: string) -> uint32` | The same from files. |
 | `glint_program_start(vs: string, fs: string) -> uint32` | Starts compiling and linking and returns at once. With `GL_KHR_parallel_shader_compile` the driver works on its own threads. |
-| `glint_program_poll(prog) -> int32` | 1 ready, 0 still compiling, -1 failed (log in `glint_error()`; the program is deleted). Draw some other way until it says 1: a cold shader compile can take 150 ms on Mesa. |
+| `glint_program_poll(prog) -> int32` | 1 ready, 0 still compiling, -1 failed (log in `glint_error()`; the program is deleted). Draw some other way until it says 1. Many drivers (Mesa llvmpipe and radeonsi) report ready at once and do the real compile on the first draw that uses the program, so after it says 1, draw one hidden warm-up frame (into an off-screen framebuffer) before showing GL output. MythicUI measured a cold start going from 452 ms to 13 ms this way. |
 | `glint_read_file(path: cstring, &len: int64) -> uint8*` | A whole file, NUL-terminated; free it with `free`. 0 if it can't be read. |
 
 **#include.** Shader text may have lines like `#include "lights.glsl"` (or `<lights.glsl>`). The path is relative to the file that includes it; for string sources, relative to the current folder. Includes can nest 16 deep. `#version` must stay in the top file.
