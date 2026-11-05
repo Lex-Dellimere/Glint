@@ -12,6 +12,10 @@ Glint loads these with `dlopen` when you make the first context: `libEGL.so.1`, 
 
 With glvnd, `__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json` picks Mesa, and `LIBGL_ALWAYS_SOFTWARE=1` its software renderer (llvmpipe, GL 4.5).
 
+**Connections.** `glint_x11_visual` and `glint_screen_size` keep their X connection open, and the next context Glint makes uses it. Closing it could leave the X server with no clients, and Xvfb then resets and drops your program's own connection.
+
+**When the X server goes away.** Xlib normally ends the program on a broken connection. With libX11 1.7 or newer, Glint replaces that, so Glint calls return and `glint_context_lost` is true. Glint replaces Xlib's process-wide IO error handler to do it. A display your program opens itself through Xlib still exits unless you set `XSetIOErrorExitHandler` on it.
+
 **Not covered:** Wayland (use XWayland), GLX headless (pbuffers).
 
 ## Windows

@@ -109,6 +109,18 @@ fn main() -> int32 {
   check("make current again", glint_make_current(c));
   glint_close(c);
 
+  // a robust context (falls back to a plain one if the driver can't)
+  var rcfg: GlintConfig = glint_config();
+  rcfg.robust = true;
+  var rc: GlintContext* = glint_open_headless(16, 16, &rcfg);
+  check("robust config opens", rc != 0);
+  if (rc != 0) {
+    println("     robust context given: {rc->robust_ctx}");
+    check("not lost", !glint_context_lost(rc));
+    check("swap ok", glint_swap(rc));
+    glint_close(rc);
+  }
+
   // asking for more than the driver has fails cleanly
   var hi: GlintConfig = glint_config();
   hi.major = 9; hi.minor = 9; hi.want_major = 9; hi.want_minor = 9;

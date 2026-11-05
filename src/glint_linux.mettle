@@ -104,6 +104,7 @@ struct GlintX11 {
   DisplayWidth: fn(rawptr, int32) -> int32;
   DisplayHeight: fn(rawptr, int32) -> int32;
   XkbSetDetectableAutoRepeat: fn(rawptr, int32, int32*) -> int32;
+  SetIOErrorExitHandler: fn(rawptr, rawptr, rawptr) -> void;
 }
 
 var egl: GlintEgl;
@@ -115,6 +116,8 @@ var lib_x11: rawptr = 0;
 var lib_opengl: rawptr = 0;
 var g_backend: int32 = 0;
 var g_x_errors: int32 = 0;
+var g_x_dead: bool = false;       // the X server went away (IO error)
+var g_probe_dpy: rawptr = 0;      // a connection kept open by glint_x11_visual / glint_screen_size
 
 fn lib_open(a: cstring, b: cstring) -> rawptr {
   var h: rawptr = glint_dlopen(a, 2);   // RTLD_NOW
@@ -191,6 +194,11 @@ fn load_x11() -> bool {
   x11.DisplayWidth = (fn(rawptr, int32) -> int32)glint_dlsym(h, "XDisplayWidth");
   x11.DisplayHeight = (fn(rawptr, int32) -> int32)glint_dlsym(h, "XDisplayHeight");
   x11.XkbSetDetectableAutoRepeat = (fn(rawptr, int32, int32*) -> int32)glint_dlsym(h, "XkbSetDetectableAutoRepeat");
+  x11.SetIOErrorExitHandler = (fn(rawptr, rawptr, rawptr) -> void)glint_dlsym(h, "XSetIOErrorExitHandler");   // libX11 1.7+
+  if (x11.SetIOErrorExitHandler != 0) {
+    var set_io: fn(rawptr) -> rawptr = (fn(rawptr) -> rawptr)glint_dlsym(h, "XSetIOErrorHandler");
+    if (set_io != 0) { set_io((rawptr)&x_io_error); }
+  }
   if (x11.OpenDisplay == 0 || x11.CreateWindow == 0) { glint_internal_fail("libX11 is missing functions"); return false; }
   return true;
 }
@@ -250,6 +258,37 @@ fn to_cstr(s: string) -> cstring {
   return (cstring)out;
 }
 
+// Xlib calls exit() when the connection to the X server breaks. With libX11
+// 1.7+ this handler runs instead, so the program keeps going and every Glint
+// context on X reports glint_context_lost.
+fn x_io_exit(d: rawptr, user: rawptr) { g_x_dead = true; }
+
+// Xlib's default IO error handler also exits, so it is replaced too (only
+// when libX11 has the exit handler; with older ones returning would not help).
+fn x_io_error(d: rawptr) -> int32 {
+  g_x_dead = true;
+  return 0;
+}
+
+// Open a connection to the X server, or take over the one a probe kept open.
+fn x_open() -> rawptr {
+  if (g_probe_dpy != 0) {
+    var d: rawptr = g_probe_dpy;
+    g_probe_dpy = 0;
+    return d;
+  }
+  var d: rawptr = x11.OpenDisplay((cstring)0);
+  if (d != 0 && x11.SetIOErrorExitHandler != 0) { x11.SetIOErrorExitHandler(d, (rawptr)&x_io_exit, (rawptr)0); }
+  return d;
+}
+
+// Keep a probe's connection for the next x_open: closing it could leave the
+// X server with no clients, and Xvfb then resets and drops the app's connection.
+fn x_keep(d: rawptr) {
+  if (g_probe_dpy != 0) { x11.CloseDisplay(d); return; }
+  g_probe_dpy = d;
+}
+
 fn x_error_ignore(d: rawptr, e: rawptr) -> int32 {
   g_x_errors += 1;
   return 0;
@@ -304,17 +343,34 @@ fn egl_pick_config(dpy: rawptr, cfg: GlintConfig*, surface_bit: int32, want_visu
   return cs[0];
 }
 
+var g_robust: bool = false;     // did the last context creation get a robust context?
+
+// Robust first when asked for, then a plain context.
 fn egl_make_context(dpy: rawptr, conf: rawptr, cfg: GlintConfig*, cfg_share: GlintContext*) -> rawptr {
+  g_robust = false;
+  if (cfg->robust) {
+    var c: rawptr = egl_make_context_r(dpy, conf, cfg, cfg_share, true);
+    if (c != 0) { g_robust = true; return c; }
+  }
+  return egl_make_context_r(dpy, conf, cfg, cfg_share, false);
+}
+
+fn egl_make_context_r(dpy: rawptr, conf: rawptr, cfg: GlintConfig*, cfg_share: GlintContext*, robust: bool) -> rawptr {
   egl.BindAPI(12450);                                     // EGL_OPENGL_API
   var maj: int32 = cfg->want_major;
   var min: int32 = cfg->want_minor;
   while (true) {
-    var a: int32[12];
+    var a: int32[16];
     a[0] = 12440; a[1] = maj;                             // CONTEXT_MAJOR_VERSION
     a[2] = 12539; a[3] = min;                             // CONTEXT_MINOR_VERSION
     a[4] = 12541; a[5] = 1;                               // PROFILE_MASK = CORE
-    a[6] = 12344;
-    if (cfg->debug) { a[6] = 12720; a[7] = 1; a[8] = 12344; }   // EGL_CONTEXT_OPENGL_DEBUG
+    var k: int32 = 6;
+    if (cfg->debug) { a[k] = 12720; a[k + 1] = 1; k += 2; }           // EGL_CONTEXT_OPENGL_DEBUG
+    if (robust) {
+      a[k] = 12722; a[k + 1] = 1; k += 2;                 // EGL_CONTEXT_OPENGL_ROBUST_ACCESS
+      a[k] = 12733; a[k + 1] = 12735; k += 2;             // RESET_NOTIFICATION_STRATEGY = LOSE_CONTEXT_ON_RESET
+    }
+    a[k] = 12344;
     var share: rawptr = 0;
     if (cfg_share != 0) { share = cfg_share->egl_ctx; }
     var c: rawptr = egl.CreateContext(dpy, conf, share, &a[0]);
@@ -354,6 +410,7 @@ fn egl_on_window(ctx: GlintContext*, cfg: GlintConfig*, visual: int64) -> bool {
   if (conf == 0) { glint_internal_fail("no EGL config fits the settings"); egl.Terminate(dpy); return false; }
   var c: rawptr = egl_make_context(dpy, conf, cfg, (GlintContext*)0);
   if (c == 0) { glint_internal_fail("eglCreateContext failed for every GL version tried"); egl.Terminate(dpy); return false; }
+  ctx->robust_ctx = g_robust;
   ctx->backend = GLINT_BACKEND_EGL;     // from here glint_close cleans up
   ctx->egl_dpy = dpy;
   ctx->egl_ctx = c;
@@ -400,6 +457,7 @@ fn egl_headless(ctx: GlintContext*, cfg: GlintConfig*) -> bool {
   ctx->egl_cfg = conf;
   var c: rawptr = egl_make_context(dpy, conf, cfg, (GlintContext*)0);
   if (c == 0) { glint_internal_fail("eglCreateContext failed for every GL version tried"); egl.Terminate(dpy); return false; }
+  ctx->robust_ctx = g_robust;
   if (egl.MakeCurrent(dpy, (rawptr)0, (rawptr)0, c) == 0) {
     glint_internal_fail("eglMakeCurrent without a surface failed (no EGL_KHR_surfaceless_context)");
     return false;
@@ -446,25 +504,33 @@ fn glx_pick_config(ctx: GlintContext*, cfg: GlintConfig*, visual: int64) -> rawp
 fn glx_on_window(ctx: GlintContext*, cfg: GlintConfig*, fbc: rawptr) -> bool {
   if (glx.CreateContextAttribsARB == 0) { glint_internal_fail("no GLX_ARB_create_context"); return false; }
   var old: rawptr = x11.SetErrorHandler((rawptr)&x_error_ignore);
+  var robust: bool = cfg->robust;
   var maj: int32 = cfg->want_major;
   var min: int32 = cfg->want_minor;
   var c: rawptr = 0;
   while (c == 0) {
-    var a: int32[10];
+    var a: int32[12];
     a[0] = 8337; a[1] = maj;                     // GLX_CONTEXT_MAJOR_VERSION_ARB
     a[2] = 8338; a[3] = min;                     // GLX_CONTEXT_MINOR_VERSION_ARB
     a[4] = 37158; a[5] = 1;                      // GLX_CONTEXT_PROFILE_MASK_ARB = CORE
     a[6] = 8340; a[7] = 0;                       // GLX_CONTEXT_FLAGS_ARB
     if (cfg->debug) { a[7] = 1; }
     a[8] = 0;
+    if (robust) { a[7] = a[7] | 4; a[8] = 33366; a[9] = 33362; a[10] = 0; }   // ROBUST_ACCESS, LOSE_CONTEXT_ON_RESET
     g_x_errors = 0;
     var share: rawptr = 0;
     if (ctx->share != 0) { share = ctx->share->glx_ctx; }
     c = glx.CreateContextAttribsARB(ctx->x_dpy, fbc, share, 1, &a[0]);
     x11.Sync(ctx->x_dpy, 0);
     if (g_x_errors != 0) { c = 0; }
-    if (c == 0 && !glint_internal_next_version(&maj, &min, cfg)) { break; }
+    if (c == 0 && !glint_internal_next_version(&maj, &min, cfg)) {
+      if (!robust) { break; }
+      robust = false;                            // try again without robustness
+      maj = cfg->want_major;
+      min = cfg->want_minor;
+    }
   }
+  ctx->robust_ctx = c != 0 && robust;
   x11.SetErrorHandler(old);
   if (c == 0) { glint_internal_fail("glXCreateContextAttribsARB failed for every GL version tried"); return false; }
   ctx->backend = GLINT_BACKEND_GLX;
@@ -591,7 +657,7 @@ fn x_open_window(ctx: GlintContext*, title: string, w: int32, h: int32, cfg: Gli
 
 fn x_connect(ctx: GlintContext*) -> bool {
   if (!load_x11()) { return false; }
-  ctx->x_dpy = x11.OpenDisplay((cstring)0);
+  ctx->x_dpy = x_open();
   if (ctx->x_dpy == 0) { glint_internal_fail("cannot open the X11 display (is DISPLAY set?)"); return false; }
   return true;
 }
@@ -601,12 +667,12 @@ fn x_connect(ctx: GlintContext*) -> bool {
 // Size of the screen in pixels (the default X screen). False if there is no display.
 export fn glint_screen_size(w: int32*, h: int32*) -> bool {
   if (!load_x11()) { return false; }
-  var d: rawptr = x11.OpenDisplay((cstring)0);
+  var d: rawptr = x_open();
   if (d == 0) { glint_internal_fail("cannot open the X11 display"); return false; }
   var s: int32 = x11.DefaultScreen(d);
   *w = x11.DisplayWidth(d, s);
   *h = x11.DisplayHeight(d, s);
-  x11.CloseDisplay(d);
+  x_keep(d);
   return true;
 }
 
@@ -628,7 +694,7 @@ export fn glint_x11_visual(cfg_in: GlintConfig*, visual_id: int64*, depth: int32
   var ok: bool = visual != 0;
   if (ok) { *visual_id = get64((uint8*)visual, 8); *depth = d; }
   x11.SetErrorHandler(old);
-  x11.CloseDisplay(ctx->x_dpy);
+  x_keep(ctx->x_dpy);              // glint_open_existing will use it
   free((rawptr)ctx);
   if (!ok) { glint_internal_fail("no X visual for GL"); }
   return ok;
@@ -763,10 +829,24 @@ export fn glint_make_current(ctx: GlintContext*) -> bool {
 }
 
 // Show what was drawn (no-op for headless contexts).
-export fn glint_swap(ctx: GlintContext*) {
-  if (ctx->kind == GLINT_KIND_HEADLESS) { glFlush(); return; }
-  if (ctx->backend == GLINT_BACKEND_EGL) { egl.SwapBuffers(ctx->egl_dpy, ctx->egl_surf); }
-  else if (ctx->backend == GLINT_BACKEND_GLX) { glx.SwapBuffers(ctx->x_dpy, ctx->win); }
+// Returns false if the swap failed; glint_context_lost(ctx) is then true.
+export fn glint_swap(ctx: GlintContext*) -> bool {
+  if (ctx->lost || g_x_dead) { ctx->lost = true; return false; }
+  if (ctx->kind == GLINT_KIND_HEADLESS) { glFlush(); return true; }
+  if (ctx->backend == GLINT_BACKEND_EGL) {
+    if (egl.SwapBuffers(ctx->egl_dpy, ctx->egl_surf) == 0) { egl_swap_failed(ctx); return false; }
+  } else if (ctx->backend == GLINT_BACKEND_GLX) {
+    glx.SwapBuffers(ctx->x_dpy, ctx->win);
+  }
+  if (g_x_dead) { ctx->lost = true; return false; }
+  return true;
+}
+
+// A failed eglSwapBuffers (EGL_CONTEXT_LOST, EGL_BAD_SURFACE, EGL_BAD_NATIVE_WINDOW
+// ...) means the surface or context is gone: there is no way to retry it.
+fn egl_swap_failed(ctx: GlintContext*) {
+  egl.GetError();                 // clear it
+  ctx->lost = true;
 }
 
 fn egl_has(ctx: GlintContext*, name: string) -> bool {
@@ -796,6 +876,7 @@ export fn glint_swap_damage(ctx: GlintContext*, rects: int32*, n: int32) -> bool
   }
   var ok: bool = egl.SwapBuffersWithDamage(ctx->egl_dpy, ctx->egl_surf, r, n) != 0;
   free((rawptr)r);
+  if (!ok) { egl_swap_failed(ctx); }
   return ok;
 }
 
@@ -929,13 +1010,18 @@ fn x_pump(ctx: GlintContext*) {
 
 // Take the next event, if any. Call it in a loop each frame until it returns false.
 export fn glint_poll(ctx: GlintContext*, out: GlintEvent*) -> bool {
-  if (ctx->kind == GLINT_KIND_WINDOW && ctx->x_dpy != 0) { x_pump(ctx); }
+  if (g_x_dead && ctx->x_dpy != 0) { ctx->lost = true; }
+  if (ctx->kind == GLINT_KIND_WINDOW && ctx->x_dpy != 0 && !g_x_dead) { x_pump(ctx); }
   return glint_internal_pop(ctx, out);
 }
 
 // Free the context (and Glint's window, if it made one).
 export fn glint_close(ctx: GlintContext*) {
   if (ctx == 0) { return; }
+  if (g_x_dead && ctx->x_dpy != 0) {   // the X server is gone: any call on it would fail
+    free((rawptr)ctx);
+    return;
+  }
   if (ctx->backend == GLINT_BACKEND_EGL && ctx->egl_dpy != 0) {
     egl.MakeCurrent(ctx->egl_dpy, (rawptr)0, (rawptr)0, (rawptr)0);
     if (ctx->egl_surf != 0) { egl.DestroySurface(ctx->egl_dpy, ctx->egl_surf); }

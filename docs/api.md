@@ -15,7 +15,7 @@ Every Glint name starts with `glint_`, `Glint` or `GLINT_`; GL itself keeps its 
 | `glint_x11_visual(cfg, &visual_id: int64, &depth: int32) -> bool` | Linux: the X visual and depth to make your own window with before `glint_open_existing`. Make a colormap for that visual too. False on Windows. |
 | `glint_close(ctx)` | Frees the context, and the window if Glint made it. |
 | `glint_make_current(ctx) -> bool` | Makes this context current on the calling thread. |
-| `glint_swap(ctx)` | Shows the frame. For headless contexts it only flushes. |
+| `glint_swap(ctx) -> bool` | Shows the frame. For headless contexts it only flushes. False if the swap failed: the context is then lost. |
 | `glint_swap_damage(ctx, rects: int32*, n) -> bool` | Shows the frame, telling the system only `n` rectangles (x, y, w, h from the top-left) changed. Uses `EGL_KHR`/`EXT_swap_buffers_with_damage`; elsewhere it does a full swap and returns false. |
 | `glint_buffer_age(ctx) -> int32` | Ask before drawing a frame: how many frames old the back buffer is (1 = last frame's picture is there). 0 = unknown, so redraw everything. EGL and GLX with `*_EXT_buffer_age`; always 0 on WGL. |
 | `glint_set_vsync(ctx, n: int32) -> bool` | Swap interval: 1 waits for vblank, 0 does not. |
@@ -25,7 +25,9 @@ Every Glint name starts with `glint_`, `Glint` or `GLINT_`; GL itself keeps its 
 | `glint_getproc(name: cstring) -> int64` | The address of any GL function, for names Glint does not declare. |
 | `glint_time() -> float64` | Seconds from a fixed point, for frame timing. |
 
-`GlintConfig` fields: `major`, `minor` (lowest version accepted), `want_major`, `want_minor` (tried first), `debug`, `vsync`, `depth_bits`, `stencil_bits`, `samples`, `srgb`, `resizable`, `visible`, `backend` (`GLINT_BACKEND_AUTO`, `_EGL`, `_GLX`, `_WGL`).
+`GlintConfig` fields: `major`, `minor` (lowest version accepted), `want_major`, `want_minor` (tried first), `debug`, `robust` (a context that reports GPU resets; Glint falls back to a plain one if the driver can't, and `ctx->robust_ctx` says which you got), `vsync`, `depth_bits`, `stencil_bits`, `samples`, `srgb`, `resizable`, `visible`, `backend` (`GLINT_BACKEND_AUTO`, `_EGL`, `_GLX`, `_WGL`), `place`, `x`, `y`.
+
+**Lost contexts.** `glint_context_lost(ctx) -> bool` is true after a swap failed, after a GPU reset (with `robust`), or when the X server went away. A lost context can't come back: close it and make a new one, or draw some other way (for example on the CPU). Check it after `glint_swap` or once a frame.
 
 Read-only facts about a context:
 
@@ -87,6 +89,8 @@ In Mettle strings, `{` starts an interpolation, so write `{{` for a literal brac
 | `glint_link(shaders: uint32*, n, separable: bool) -> uint32` | Links compiled shaders (and deletes them). |
 | `glint_program(vs: string, fs: string) -> uint32` | Vertex + fragment program from strings. |
 | `glint_program_files(vs_path: string, fs_path: string) -> uint32` | The same from files. |
+| `glint_program_start(vs: string, fs: string) -> uint32` | Starts compiling and linking and returns at once. With `GL_KHR_parallel_shader_compile` the driver works on its own threads. |
+| `glint_program_poll(prog) -> int32` | 1 ready, 0 still compiling, -1 failed (log in `glint_error()`; the program is deleted). Draw some other way until it says 1: a cold shader compile can take 150 ms on Mesa. |
 | `glint_read_file(path: cstring, &len: int64) -> uint8*` | A whole file, NUL-terminated; free it with `free`. 0 if it can't be read. |
 
 **#include.** Shader text may have lines like `#include "lights.glsl"` (or `<lights.glsl>`). The path is relative to the file that includes it; for string sources, relative to the current folder. Includes can nest 16 deep. `#version` must stay in the top file.

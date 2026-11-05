@@ -54,7 +54,37 @@ export fn wt_main() -> int32 {
     check("preview no GL error", glGetError() == 0);
     glint_preview_close(pv);
   }
+  // probes keep their connection; the next open uses it
+  var vid2: int64 = 0;
+  var d2: int32 = 0;
+  var sw: int32 = 0;
+  var sh: int32 = 0;
+  check("probe twice + screen size", glint_x11_visual((GlintConfig*)0, &vid2, &d2) && glint_x11_visual((GlintConfig*)0, &vid2, &d2) && glint_screen_size(&sw, &sh) && sw == 640);
+  existing_window(GLINT_BACKEND_EGL, "existing after probes", xid);
+
+  // the X server dies under a live window: Glint reports a lost context and
+  // the program keeps running (Xlib would otherwise exit)
+  var cfg: GlintConfig = glint_config();
+  cfg.robust = true;
+  var closed: fn(rawptr) -> int32 = (fn(rawptr) -> int32)wt_dlsym(x, "XCloseDisplay");
+  closed(dpy);                  // the test's own plain-Xlib connection would exit the program
+  var live: GlintContext* = glint_open_window("dies", 64, 64, &cfg);
+  check("window before the server dies", live != 0);
   xvfb_stop();
+  if (live != 0) {
+    var ev: GlintEvent;
+    var t0: float64 = glint_time();
+    var swapped: bool = true;
+    while (glint_time() - t0 < 0.5) {
+      while (glint_poll(live, &ev)) { }
+      glClear(GL_COLOR_BUFFER_BIT);
+      swapped = glint_swap(live);
+    }
+    check("swap fails after the server died", !swapped);
+    check("context reported lost", glint_context_lost(live));
+    glint_close(live);
+    check("still running after the X server died", true);
+  }
   if (wt_fails != 0) { println("{wt_fails} failed"); return 1; }
   return 0;
 }

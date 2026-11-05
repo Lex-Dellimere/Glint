@@ -92,6 +92,27 @@ fn main() -> int32 {
   var al: int32 = glint_attrib_info(p->id, 0, &name[0], 64, &kind, &size);
   check("attribute aPos at 0 is a vec2", al == 0 && glint_glsl_type(kind) == "vec2");
 
+  // building without waiting
+  var ap: uint32 = glint_program_start("#version 330 core\nlayout (location = 0) in vec2 aPos;\nvoid main() {{ gl_Position = vec4(aPos, 0.0, 1.0); }\n",
+                                       "#version 330 core\nout vec4 o;\nvoid main() {{ o = vec4(1.0, 1.0, 0.0, 1.0); }\n");
+  var st: int32 = 0;
+  var polls: int32 = 0;
+  var ts: float64 = glint_time();
+  while (st == 0 && glint_time() - ts < 5.0) { st = glint_program_poll(ap); polls += 1; }
+  println("     async build ready after {polls} polls");
+  check("async build ready", st == 1);
+  glUseProgram(ap);
+  check("async program draws yellow", near(draw(c), 0xFFFF00));
+  check("polling again stays ready", glint_program_poll(ap) == 1);
+  var bp: uint32 = glint_program_start("#version 330 core\nvoid main() {{ gl_Position = vec4(0.0); }\n",
+                                       "#version 330 core\nout vec4 o;\nvoid main() {{ o = nope; }\n");
+  var bs: int32 = 0;
+  polls = 0;
+  var t0: float64 = glint_time();
+  while (bs == 0 && glint_time() - t0 < 5.0) { bs = glint_program_poll(bp); polls += 1; }
+  println("     broken async build: {bs} after {polls} polls");
+  check("async broken build gives -1", bs == -1 && has(glint_error(), "fragment shader did not compile"));
+
   // an error in an included file names that file and line
   var bad: uint32 = glint_shader_file(GL_FRAGMENT_SHADER, "tests/data/shaders/broken.frag");
   check("broken shader gives 0", bad == 0);

@@ -146,6 +146,15 @@ export fn glint_internal_make_fbo(ctx: GlintContext*, w: int32, h: int32, sample
   return true;
 }
 
+// Has this context stopped working? True after a swap failed, after a GPU
+// reset (robust contexts, see cfg.robust), or when the X server went away. A
+// lost context can't be fixed: close it and make a new one, or draw another way.
+export fn glint_context_lost(ctx: GlintContext*) -> bool {
+  if (ctx->lost) { return true; }
+  if (ctx->robust_ctx && glGetGraphicsResetStatus != 0 && glGetGraphicsResetStatus() != GL_NO_ERROR) { ctx->lost = true; }
+  return ctx->lost;
+}
+
 // The framebuffer to bind when you mean "the screen": 0 for windows, the
 // off-screen one for headless contexts.
 export fn glint_framebuffer(ctx: GlintContext*) -> uint32 { return ctx->fbo; }

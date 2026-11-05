@@ -304,22 +304,30 @@ fn wgl_on_hwnd(ctx: GlintContext*, cfg: GlintConfig*) -> bool {
     glint_w32_DescribePixelFormat(ctx->hdc, fmt, 40, &pfd[0]);
     if (glint_w32_SetPixelFormat(ctx->hdc, fmt, &pfd[0]) == 0) { glint_internal_fail("SetPixelFormat failed"); return false; }
   }
+  var robust: bool = cfg->robust;
   var maj: int32 = cfg->want_major;
   var min: int32 = cfg->want_minor;
   var rc: int64 = 0;
   while (rc == 0) {
-    var a: int32[10];
+    var a: int32[12];
     a[0] = 8337; a[1] = maj;                               // WGL_CONTEXT_MAJOR_VERSION_ARB
     a[2] = 8338; a[3] = min;                               // WGL_CONTEXT_MINOR_VERSION_ARB
     a[4] = 37158; a[5] = 1;                                // WGL_CONTEXT_PROFILE_MASK_ARB = CORE
     a[6] = 8340; a[7] = 0;                                 // WGL_CONTEXT_FLAGS_ARB
     if (cfg->debug) { a[7] = 1; }
     a[8] = 0;
+    if (robust) { a[7] = a[7] | 4; a[8] = 33366; a[9] = 33362; a[10] = 0; }   // ROBUST_ACCESS, LOSE_CONTEXT_ON_RESET
     var share: int64 = 0;
     if (ctx->share != 0) { share = ctx->share->hglrc; }
     rc = wgl.CreateContextAttribsARB(ctx->hdc, share, &a[0]);
-    if (rc == 0 && !glint_internal_next_version(&maj, &min, cfg)) { break; }
+    if (rc == 0 && !glint_internal_next_version(&maj, &min, cfg)) {
+      if (!robust) { break; }
+      robust = false;                                      // try again without robustness
+      maj = cfg->want_major;
+      min = cfg->want_minor;
+    }
   }
+  ctx->robust_ctx = rc != 0 && robust;
   if (rc == 0) { glint_internal_fail("wglCreateContextAttribsARB failed for every GL version tried"); return false; }
   if (wgl.MakeCurrent(ctx->hdc, rc) == 0) { glint_internal_fail("wglMakeCurrent failed"); return false; }
   ctx->hglrc = rc;
@@ -438,9 +446,12 @@ export fn glint_buffer_age(ctx: GlintContext*) -> int32 {
 
 export fn glint_make_current(ctx: GlintContext*) -> bool { return wgl.MakeCurrent(ctx->hdc, ctx->hglrc) != 0; }
 
-export fn glint_swap(ctx: GlintContext*) {
-  if (ctx->kind == GLINT_KIND_HEADLESS) { glFlush(); return; }
-  glint_w32_SwapBuffers(ctx->hdc);
+// Returns false if the swap failed; glint_context_lost(ctx) is then true.
+export fn glint_swap(ctx: GlintContext*) -> bool {
+  if (ctx->lost) { return false; }
+  if (ctx->kind == GLINT_KIND_HEADLESS) { glFlush(); return true; }
+  if (glint_w32_SwapBuffers(ctx->hdc) == 0) { ctx->lost = true; return false; }
+  return true;
 }
 
 export fn glint_set_vsync(ctx: GlintContext*, n: int32) -> bool {
