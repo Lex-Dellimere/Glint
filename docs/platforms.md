@@ -16,7 +16,9 @@ With glvnd, `__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mes
 
 **When the X server goes away.** Xlib normally ends the program on a broken connection. With libX11 1.7 or newer, Glint replaces that, so Glint calls return and `glint_context_lost` is true. Glint replaces Xlib's process-wide IO error handler to do it. A display your program opens itself through Xlib still exits unless you set `XSetIOErrorExitHandler` on it.
 
-**Not covered:** Wayland (use XWayland), GLX headless (pbuffers).
+**Not covered:** Wayland (use XWayland, or the `window` library), GLX headless (pbuffers).
+
+Glint loads the system libraries with `std/dl` and reads `GLINT_EGL_PLATFORM` with `std/env`. The Windows side still calls `LoadLibraryA` itself, because the Windows compiler mbuild uses (v0.17.0) has no `std/dl`.
 
 ## Windows
 

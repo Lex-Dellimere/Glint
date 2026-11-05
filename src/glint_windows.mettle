@@ -121,12 +121,34 @@ fn wide(s: string) -> uint16* {
   return out;
 }
 
-fn w32_key(vk: int64) -> int32 {
+// lp is the message's lParam: bits 16-23 are the scan code, bit 24 "extended",
+// which tells the right-hand Ctrl/Alt and keypad Enter from the others.
+fn w32_key(vk: int64, lp: int64) -> int32 {
+  var ext: bool = ((lp >> 24) & 1) != 0;
+  var scan: int64 = (lp >> 16) & 255;
   if ((vk >= 65 && vk <= 90) || (vk >= 48 && vk <= 57) || vk == 32) { return (int32)vk; }
   if (vk >= 112 && vk <= 123) { return GLINT_KEY_F1 + (int32)(vk - 112); }
+  if (vk >= 96 && vk <= 105) { return GLINT_KEY_KP_0 + (int32)(vk - 96); }   // VK_NUMPAD0..9
+  if (!ext) {
+    // with Num Lock off the keypad sends the navigation keys, but not marked extended
+    switch ((int32)vk) {
+      case 45: { return GLINT_KEY_KP_0; }
+      case 35: { return GLINT_KEY_KP_0 + 1; }
+      case 40: { return GLINT_KEY_KP_0 + 2; }
+      case 34: { return GLINT_KEY_KP_0 + 3; }
+      case 37: { return GLINT_KEY_KP_0 + 4; }
+      case 12: { return GLINT_KEY_KP_0 + 5; }     // VK_CLEAR
+      case 39: { return GLINT_KEY_KP_0 + 6; }
+      case 36: { return GLINT_KEY_KP_0 + 7; }
+      case 38: { return GLINT_KEY_KP_0 + 8; }
+      case 33: { return GLINT_KEY_KP_0 + 9; }
+      case 46: { return GLINT_KEY_KP_DECIMAL; }
+      default: { }
+    }
+  }
   switch ((int32)vk) {
     case 27: { return GLINT_KEY_ESCAPE; }
-    case 13: { return GLINT_KEY_ENTER; }
+    case 13: { if (ext) { return GLINT_KEY_KP_ENTER; } return GLINT_KEY_ENTER; }
     case 9: { return GLINT_KEY_TAB; }
     case 8: { return GLINT_KEY_BACKSPACE; }
     case 45: { return GLINT_KEY_INSERT; }
@@ -139,9 +161,33 @@ fn w32_key(vk: int64) -> int32 {
     case 34: { return GLINT_KEY_PAGE_DOWN; }
     case 36: { return GLINT_KEY_HOME; }
     case 35: { return GLINT_KEY_END; }
-    case 16: { return GLINT_KEY_LEFT_SHIFT; }
-    case 17: { return GLINT_KEY_LEFT_CTRL; }
-    case 18: { return GLINT_KEY_LEFT_ALT; }
+    case 16: { if (scan == 54) { return GLINT_KEY_RIGHT_SHIFT; } return GLINT_KEY_LEFT_SHIFT; }
+    case 17: { if (ext) { return GLINT_KEY_RIGHT_CTRL; } return GLINT_KEY_LEFT_CTRL; }
+    case 18: { if (ext) { return GLINT_KEY_RIGHT_ALT; } return GLINT_KEY_LEFT_ALT; }
+    case 91: { return GLINT_KEY_LEFT_SUPER; }
+    case 92: { return GLINT_KEY_RIGHT_SUPER; }
+    case 93: { return GLINT_KEY_MENU; }
+    case 20: { return GLINT_KEY_CAPS_LOCK; }
+    case 145: { return GLINT_KEY_SCROLL_LOCK; }
+    case 144: { return GLINT_KEY_NUM_LOCK; }
+    case 44: { return GLINT_KEY_PRINT_SCREEN; }
+    case 19: { return GLINT_KEY_PAUSE; }
+    case 106: { return GLINT_KEY_KP_MULTIPLY; }
+    case 107: { return GLINT_KEY_KP_ADD; }
+    case 109: { return GLINT_KEY_KP_SUBTRACT; }
+    case 110: { return GLINT_KEY_KP_DECIMAL; }
+    case 111: { return GLINT_KEY_KP_DIVIDE; }
+    case 186: { return 59; }     // VK_OEM_1      ;
+    case 187: { return 61; }     // VK_OEM_PLUS   =
+    case 188: { return 44; }     // VK_OEM_COMMA  ,
+    case 189: { return 45; }     // VK_OEM_MINUS  -
+    case 190: { return 46; }     // VK_OEM_PERIOD .
+    case 191: { return 47; }     // VK_OEM_2      /
+    case 192: { return 96; }     // VK_OEM_3      `
+    case 219: { return 91; }     // VK_OEM_4      [
+    case 220: { return 92; }     // VK_OEM_5      backslash
+    case 221: { return 93; }     // VK_OEM_6      ]
+    case 222: { return 39; }     // VK_OEM_7      '
     default: { return GLINT_KEY_UNKNOWN; }
   }
   return GLINT_KEY_UNKNOWN;
@@ -173,7 +219,7 @@ fn glint_w32_wndproc(hwnd: int64, msg: uint32, wp: int64, lp: int64) -> int64 {
   } else if (m == 256 || m == 260 || m == 257 || m == 261) {                                    // KEYDOWN SYSKEYDOWN KEYUP SYSKEYUP
     e.kind = GLINT_EV_KEY_DOWN;
     if (m == 257 || m == 261) { e.kind = GLINT_EV_KEY_UP; }
-    e.key = w32_key(wp);
+    e.key = w32_key(wp, lp);
     e.mods = w32_mods();
   } else if (m == 512) {                                                                         // WM_MOUSEMOVE
     e.kind = GLINT_EV_MOUSE_MOVE; e.x = lo16(lp); e.y = hi16(lp);

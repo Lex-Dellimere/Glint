@@ -1,16 +1,15 @@
 // Linux: EGL first, GLX as a fallback, an X11 window through libX11, and
 // headless EGL (device or Mesa surfaceless). Every system library is loaded at
-// run time with dlopen, so a machine without GL still starts the program and
+// run time with std/dl, so a machine without GL still starts the program and
 // gets a clear error from glint_open_*.
 import "std/io";
 import "std/mem";
+import "std/dl";
+import "std/env";
 import "glint_types";
 import "glint_gl";
 import "glint_common";
 
-extern fn glint_dlopen(path: cstring, flags: int32) -> rawptr = "dlopen";
-extern fn glint_dlsym(h: rawptr, name: cstring) -> rawptr = "dlsym";
-extern fn glint_getenv(name: cstring) -> cstring = "getenv";
 extern fn glint_stat(path: cstring, st: uint8*) -> int32 = "stat";
 
 // Read-by-offset file access (raw system calls), for files another program
@@ -119,9 +118,9 @@ var g_x_errors: int32 = 0;
 var g_x_dead: bool = false;       // the X server went away (IO error)
 var g_probe_dpy: rawptr = 0;      // a connection kept open by glint_x11_visual / glint_screen_size
 
-fn lib_open(a: cstring, b: cstring) -> rawptr {
-  var h: rawptr = glint_dlopen(a, 2);   // RTLD_NOW
-  if (h == 0 && b != 0) { h = glint_dlopen(b, 2); }
+fn lib_open(a: string, b: string) -> rawptr {
+  var h: rawptr = dl_open(a);
+  if (h == 0) { h = dl_open(b); }
   return h;
 }
 
@@ -130,25 +129,25 @@ fn load_egl() -> bool {
   lib_egl = lib_open("libEGL.so.1", "libEGL.so");
   if (lib_egl == 0) { glint_internal_fail("libEGL.so.1 not found"); return false; }
   var h: rawptr = lib_egl;
-  egl.GetProcAddress = (fn(cstring) -> int64)glint_dlsym(h, "eglGetProcAddress");
-  egl.GetDisplay = (fn(rawptr) -> rawptr)glint_dlsym(h, "eglGetDisplay");
-  egl.GetPlatformDisplay = (fn(int32, rawptr, int64*) -> rawptr)glint_dlsym(h, "eglGetPlatformDisplay");
-  egl.Initialize = (fn(rawptr, int32*, int32*) -> uint32)glint_dlsym(h, "eglInitialize");
-  egl.Terminate = (fn(rawptr) -> uint32)glint_dlsym(h, "eglTerminate");
-  egl.QueryString = (fn(rawptr, int32) -> cstring)glint_dlsym(h, "eglQueryString");
-  egl.BindAPI = (fn(int32) -> uint32)glint_dlsym(h, "eglBindAPI");
-  egl.ChooseConfig = (fn(rawptr, int32*, rawptr*, int32, int32*) -> uint32)glint_dlsym(h, "eglChooseConfig");
-  egl.GetConfigAttrib = (fn(rawptr, rawptr, int32, int32*) -> uint32)glint_dlsym(h, "eglGetConfigAttrib");
-  egl.CreateContext = (fn(rawptr, rawptr, rawptr, int32*) -> rawptr)glint_dlsym(h, "eglCreateContext");
-  egl.DestroyContext = (fn(rawptr, rawptr) -> uint32)glint_dlsym(h, "eglDestroyContext");
-  egl.CreateWindowSurface = (fn(rawptr, rawptr, int64, int32*) -> rawptr)glint_dlsym(h, "eglCreateWindowSurface");
-  egl.DestroySurface = (fn(rawptr, rawptr) -> uint32)glint_dlsym(h, "eglDestroySurface");
-  egl.QuerySurface = (fn(rawptr, rawptr, int32, int32*) -> uint32)glint_dlsym(h, "eglQuerySurface");
-  egl.MakeCurrent = (fn(rawptr, rawptr, rawptr, rawptr) -> uint32)glint_dlsym(h, "eglMakeCurrent");
-  egl.SwapBuffers = (fn(rawptr, rawptr) -> uint32)glint_dlsym(h, "eglSwapBuffers");
-  egl.SwapInterval = (fn(rawptr, int32) -> uint32)glint_dlsym(h, "eglSwapInterval");
-  egl.GetError = (fn() -> int32)glint_dlsym(h, "eglGetError");
-  egl.CreatePbufferSurface = (fn(rawptr, rawptr, int32*) -> rawptr)glint_dlsym(h, "eglCreatePbufferSurface");
+  egl.GetProcAddress = (fn(cstring) -> int64)dl_sym(h, "eglGetProcAddress");
+  egl.GetDisplay = (fn(rawptr) -> rawptr)dl_sym(h, "eglGetDisplay");
+  egl.GetPlatformDisplay = (fn(int32, rawptr, int64*) -> rawptr)dl_sym(h, "eglGetPlatformDisplay");
+  egl.Initialize = (fn(rawptr, int32*, int32*) -> uint32)dl_sym(h, "eglInitialize");
+  egl.Terminate = (fn(rawptr) -> uint32)dl_sym(h, "eglTerminate");
+  egl.QueryString = (fn(rawptr, int32) -> cstring)dl_sym(h, "eglQueryString");
+  egl.BindAPI = (fn(int32) -> uint32)dl_sym(h, "eglBindAPI");
+  egl.ChooseConfig = (fn(rawptr, int32*, rawptr*, int32, int32*) -> uint32)dl_sym(h, "eglChooseConfig");
+  egl.GetConfigAttrib = (fn(rawptr, rawptr, int32, int32*) -> uint32)dl_sym(h, "eglGetConfigAttrib");
+  egl.CreateContext = (fn(rawptr, rawptr, rawptr, int32*) -> rawptr)dl_sym(h, "eglCreateContext");
+  egl.DestroyContext = (fn(rawptr, rawptr) -> uint32)dl_sym(h, "eglDestroyContext");
+  egl.CreateWindowSurface = (fn(rawptr, rawptr, int64, int32*) -> rawptr)dl_sym(h, "eglCreateWindowSurface");
+  egl.DestroySurface = (fn(rawptr, rawptr) -> uint32)dl_sym(h, "eglDestroySurface");
+  egl.QuerySurface = (fn(rawptr, rawptr, int32, int32*) -> uint32)dl_sym(h, "eglQuerySurface");
+  egl.MakeCurrent = (fn(rawptr, rawptr, rawptr, rawptr) -> uint32)dl_sym(h, "eglMakeCurrent");
+  egl.SwapBuffers = (fn(rawptr, rawptr) -> uint32)dl_sym(h, "eglSwapBuffers");
+  egl.SwapInterval = (fn(rawptr, int32) -> uint32)dl_sym(h, "eglSwapInterval");
+  egl.GetError = (fn() -> int32)dl_sym(h, "eglGetError");
+  egl.CreatePbufferSurface = (fn(rawptr, rawptr, int32*) -> rawptr)dl_sym(h, "eglCreatePbufferSurface");
   if (egl.GetProcAddress == 0 || egl.Initialize == 0 || egl.CreateContext == 0) {
     glint_internal_fail("libEGL is missing core functions");
     return false;
@@ -166,37 +165,37 @@ fn load_x11() -> bool {
   lib_x11 = lib_open("libX11.so.6", "libX11.so");
   if (lib_x11 == 0) { glint_internal_fail("libX11.so.6 not found"); return false; }
   var h: rawptr = lib_x11;
-  x11.OpenDisplay = (fn(cstring) -> rawptr)glint_dlsym(h, "XOpenDisplay");
-  x11.CloseDisplay = (fn(rawptr) -> int32)glint_dlsym(h, "XCloseDisplay");
-  x11.DefaultScreen = (fn(rawptr) -> int32)glint_dlsym(h, "XDefaultScreen");
-  x11.RootWindow = (fn(rawptr, int32) -> int64)glint_dlsym(h, "XRootWindow");
-  x11.DefaultVisual = (fn(rawptr, int32) -> rawptr)glint_dlsym(h, "XDefaultVisual");
-  x11.DefaultDepth = (fn(rawptr, int32) -> int32)glint_dlsym(h, "XDefaultDepth");
-  x11.GetVisualInfo = (fn(rawptr, int64, uint8*, int32*) -> uint8*)glint_dlsym(h, "XGetVisualInfo");
-  x11.CreateColormap = (fn(rawptr, int64, rawptr, int32) -> int64)glint_dlsym(h, "XCreateColormap");
-  x11.CreateWindow = (fn(rawptr, int64, int32, int32, uint32, uint32, uint32, int32, uint32, rawptr, int64, uint8*) -> int64)glint_dlsym(h, "XCreateWindow");
-  x11.DestroyWindow = (fn(rawptr, int64) -> int32)glint_dlsym(h, "XDestroyWindow");
-  x11.MapWindow = (fn(rawptr, int64) -> int32)glint_dlsym(h, "XMapWindow");
-  x11.StoreName = (fn(rawptr, int64, cstring) -> int32)glint_dlsym(h, "XStoreName");
-  x11.InternAtom = (fn(rawptr, cstring, int32) -> int64)glint_dlsym(h, "XInternAtom");
-  x11.SetWMProtocols = (fn(rawptr, int64, int64*, int32) -> int32)glint_dlsym(h, "XSetWMProtocols");
-  x11.SetWMNormalHints = (fn(rawptr, int64, uint8*) -> void)glint_dlsym(h, "XSetWMNormalHints");
-  x11.ResizeWindow = (fn(rawptr, int64, uint32, uint32) -> int32)glint_dlsym(h, "XResizeWindow");
-  x11.Pending = (fn(rawptr) -> int32)glint_dlsym(h, "XPending");
-  x11.NextEvent = (fn(rawptr, uint8*) -> int32)glint_dlsym(h, "XNextEvent");
-  x11.LookupKeysym = (fn(uint8*, int32) -> int64)glint_dlsym(h, "XLookupKeysym");
-  x11.GetWindowAttributes = (fn(rawptr, int64, uint8*) -> int32)glint_dlsym(h, "XGetWindowAttributes");
-  x11.Flush = (fn(rawptr) -> int32)glint_dlsym(h, "XFlush");
-  x11.Sync = (fn(rawptr, int32) -> int32)glint_dlsym(h, "XSync");
-  x11.Free = (fn(rawptr) -> int32)glint_dlsym(h, "XFree");
-  x11.SetErrorHandler = (fn(rawptr) -> rawptr)glint_dlsym(h, "XSetErrorHandler");
-  x11.MoveWindow = (fn(rawptr, int64, int32, int32) -> int32)glint_dlsym(h, "XMoveWindow");
-  x11.DisplayWidth = (fn(rawptr, int32) -> int32)glint_dlsym(h, "XDisplayWidth");
-  x11.DisplayHeight = (fn(rawptr, int32) -> int32)glint_dlsym(h, "XDisplayHeight");
-  x11.XkbSetDetectableAutoRepeat = (fn(rawptr, int32, int32*) -> int32)glint_dlsym(h, "XkbSetDetectableAutoRepeat");
-  x11.SetIOErrorExitHandler = (fn(rawptr, rawptr, rawptr) -> void)glint_dlsym(h, "XSetIOErrorExitHandler");   // libX11 1.7+
+  x11.OpenDisplay = (fn(cstring) -> rawptr)dl_sym(h, "XOpenDisplay");
+  x11.CloseDisplay = (fn(rawptr) -> int32)dl_sym(h, "XCloseDisplay");
+  x11.DefaultScreen = (fn(rawptr) -> int32)dl_sym(h, "XDefaultScreen");
+  x11.RootWindow = (fn(rawptr, int32) -> int64)dl_sym(h, "XRootWindow");
+  x11.DefaultVisual = (fn(rawptr, int32) -> rawptr)dl_sym(h, "XDefaultVisual");
+  x11.DefaultDepth = (fn(rawptr, int32) -> int32)dl_sym(h, "XDefaultDepth");
+  x11.GetVisualInfo = (fn(rawptr, int64, uint8*, int32*) -> uint8*)dl_sym(h, "XGetVisualInfo");
+  x11.CreateColormap = (fn(rawptr, int64, rawptr, int32) -> int64)dl_sym(h, "XCreateColormap");
+  x11.CreateWindow = (fn(rawptr, int64, int32, int32, uint32, uint32, uint32, int32, uint32, rawptr, int64, uint8*) -> int64)dl_sym(h, "XCreateWindow");
+  x11.DestroyWindow = (fn(rawptr, int64) -> int32)dl_sym(h, "XDestroyWindow");
+  x11.MapWindow = (fn(rawptr, int64) -> int32)dl_sym(h, "XMapWindow");
+  x11.StoreName = (fn(rawptr, int64, cstring) -> int32)dl_sym(h, "XStoreName");
+  x11.InternAtom = (fn(rawptr, cstring, int32) -> int64)dl_sym(h, "XInternAtom");
+  x11.SetWMProtocols = (fn(rawptr, int64, int64*, int32) -> int32)dl_sym(h, "XSetWMProtocols");
+  x11.SetWMNormalHints = (fn(rawptr, int64, uint8*) -> void)dl_sym(h, "XSetWMNormalHints");
+  x11.ResizeWindow = (fn(rawptr, int64, uint32, uint32) -> int32)dl_sym(h, "XResizeWindow");
+  x11.Pending = (fn(rawptr) -> int32)dl_sym(h, "XPending");
+  x11.NextEvent = (fn(rawptr, uint8*) -> int32)dl_sym(h, "XNextEvent");
+  x11.LookupKeysym = (fn(uint8*, int32) -> int64)dl_sym(h, "XLookupKeysym");
+  x11.GetWindowAttributes = (fn(rawptr, int64, uint8*) -> int32)dl_sym(h, "XGetWindowAttributes");
+  x11.Flush = (fn(rawptr) -> int32)dl_sym(h, "XFlush");
+  x11.Sync = (fn(rawptr, int32) -> int32)dl_sym(h, "XSync");
+  x11.Free = (fn(rawptr) -> int32)dl_sym(h, "XFree");
+  x11.SetErrorHandler = (fn(rawptr) -> rawptr)dl_sym(h, "XSetErrorHandler");
+  x11.MoveWindow = (fn(rawptr, int64, int32, int32) -> int32)dl_sym(h, "XMoveWindow");
+  x11.DisplayWidth = (fn(rawptr, int32) -> int32)dl_sym(h, "XDisplayWidth");
+  x11.DisplayHeight = (fn(rawptr, int32) -> int32)dl_sym(h, "XDisplayHeight");
+  x11.XkbSetDetectableAutoRepeat = (fn(rawptr, int32, int32*) -> int32)dl_sym(h, "XkbSetDetectableAutoRepeat");
+  x11.SetIOErrorExitHandler = (fn(rawptr, rawptr, rawptr) -> void)dl_sym(h, "XSetIOErrorExitHandler");   // libX11 1.7+
   if (x11.SetIOErrorExitHandler != 0) {
-    var set_io: fn(rawptr) -> rawptr = (fn(rawptr) -> rawptr)glint_dlsym(h, "XSetIOErrorHandler");
+    var set_io: fn(rawptr) -> rawptr = (fn(rawptr) -> rawptr)dl_sym(h, "XSetIOErrorHandler");
     if (set_io != 0) { set_io((rawptr)&x_io_error); }
   }
   if (x11.OpenDisplay == 0 || x11.CreateWindow == 0) { glint_internal_fail("libX11 is missing functions"); return false; }
@@ -208,16 +207,16 @@ fn load_glx() -> bool {
   lib_glx = lib_open("libGLX.so.0", "libGL.so.1");
   if (lib_glx == 0) { glint_internal_fail("libGLX.so.0 / libGL.so.1 not found"); return false; }
   var h: rawptr = lib_glx;
-  glx.GetProcAddressARB = (fn(cstring) -> int64)glint_dlsym(h, "glXGetProcAddressARB");
-  glx.ChooseFBConfig = (fn(rawptr, int32, int32*, int32*) -> rawptr*)glint_dlsym(h, "glXChooseFBConfig");
-  glx.GetFBConfigAttrib = (fn(rawptr, rawptr, int32, int32*) -> int32)glint_dlsym(h, "glXGetFBConfigAttrib");
-  glx.GetVisualFromFBConfig = (fn(rawptr, rawptr) -> rawptr)glint_dlsym(h, "glXGetVisualFromFBConfig");
-  glx.MakeCurrent = (fn(rawptr, int64, rawptr) -> int32)glint_dlsym(h, "glXMakeCurrent");
-  glx.SwapBuffers = (fn(rawptr, int64) -> void)glint_dlsym(h, "glXSwapBuffers");
-  glx.DestroyContext = (fn(rawptr, rawptr) -> void)glint_dlsym(h, "glXDestroyContext");
-  glx.QueryExtensionsString = (fn(rawptr, int32) -> cstring)glint_dlsym(h, "glXQueryExtensionsString");
-  glx.MakeContextCurrent = (fn(rawptr, int64, int64, rawptr) -> int32)glint_dlsym(h, "glXMakeContextCurrent");
-  glx.QueryDrawable = (fn(rawptr, int64, int32, uint32*) -> void)glint_dlsym(h, "glXQueryDrawable");
+  glx.GetProcAddressARB = (fn(cstring) -> int64)dl_sym(h, "glXGetProcAddressARB");
+  glx.ChooseFBConfig = (fn(rawptr, int32, int32*, int32*) -> rawptr*)dl_sym(h, "glXChooseFBConfig");
+  glx.GetFBConfigAttrib = (fn(rawptr, rawptr, int32, int32*) -> int32)dl_sym(h, "glXGetFBConfigAttrib");
+  glx.GetVisualFromFBConfig = (fn(rawptr, rawptr) -> rawptr)dl_sym(h, "glXGetVisualFromFBConfig");
+  glx.MakeCurrent = (fn(rawptr, int64, rawptr) -> int32)dl_sym(h, "glXMakeCurrent");
+  glx.SwapBuffers = (fn(rawptr, int64) -> void)dl_sym(h, "glXSwapBuffers");
+  glx.DestroyContext = (fn(rawptr, rawptr) -> void)dl_sym(h, "glXDestroyContext");
+  glx.QueryExtensionsString = (fn(rawptr, int32) -> cstring)dl_sym(h, "glXQueryExtensionsString");
+  glx.MakeContextCurrent = (fn(rawptr, int64, int64, rawptr) -> int32)dl_sym(h, "glXMakeContextCurrent");
+  glx.QueryDrawable = (fn(rawptr, int64, int32, uint32*) -> void)dl_sym(h, "glXQueryDrawable");
   if (glx.GetProcAddressARB == 0 || glx.ChooseFBConfig == 0) { glint_internal_fail("libGLX is missing functions"); return false; }
   glx.CreateContextAttribsARB = (fn(rawptr, rawptr, rawptr, int32, int32*) -> rawptr)glx.GetProcAddressARB("glXCreateContextAttribsARB");
   glx.SwapIntervalEXT = (fn(rawptr, int64, int32) -> void)glx.GetProcAddressARB("glXSwapIntervalEXT");
@@ -229,7 +228,12 @@ fn load_glx() -> bool {
 
 fn egl_getproc(name: cstring) -> int64 {
   var p: int64 = egl.GetProcAddress(name);
-  if (p == 0 && lib_opengl != 0) { p = (int64)glint_dlsym(lib_opengl, name); }
+  if (p == 0 && lib_opengl != 0) {
+    var n: string;
+    n.chars = (uint8*)name;
+    n.length = (uint64)cstr_len(name);
+    p = (int64)dl_sym(lib_opengl, n);
+  }
   return p;
 }
 
@@ -294,10 +298,14 @@ fn x_error_ignore(d: rawptr, e: rawptr) -> int32 {
   return 0;
 }
 
-fn env_is(name: cstring, want: string) -> bool {
-  var v: cstring = glint_getenv(name);
-  if (v == 0) { return false; }
-  return glint_internal_cstr_is(v, want);
+fn env_is(name: string, want: string) -> bool {
+  return env_get_or(name, "") == want;
+}
+
+fn cstr_len(c: cstring) -> int64 {
+  var n: int64 = 0;
+  while (c[n] != 0) { n += 1; }
+  return n;
 }
 
 fn cfg_or_default(cfg: GlintConfig*, store: GlintConfig*) -> GlintConfig* {
@@ -928,10 +936,36 @@ fn x_key(sym: int64) -> int32 {
   if (sym >= 97 && sym <= 122) { return (int32)sym - 32; }      // a-z -> A-Z
   if (sym >= 32 && sym <= 126) { return (int32)sym; }
   if (sym >= 65470 && sym <= 65481) { return GLINT_KEY_F1 + (int32)(sym - 65470); }   // XK_F1..F12
+  if (sym >= 65456 && sym <= 65465) { return GLINT_KEY_KP_0 + (int32)(sym - 65456); }  // XK_KP_0..9
   switch ((int32)sym) {
     case 65307: { return GLINT_KEY_ESCAPE; }
     case 65293: { return GLINT_KEY_ENTER; }
-    case 65421: { return GLINT_KEY_ENTER; }
+    case 65421: { return GLINT_KEY_KP_ENTER; }
+    // keypad with Num Lock off: same physical keys
+    case 65438: { return GLINT_KEY_KP_0; }      // KP_Insert
+    case 65436: { return GLINT_KEY_KP_0 + 1; }  // KP_End
+    case 65433: { return GLINT_KEY_KP_0 + 2; }  // KP_Down
+    case 65435: { return GLINT_KEY_KP_0 + 3; }  // KP_Next
+    case 65430: { return GLINT_KEY_KP_0 + 4; }  // KP_Left
+    case 65437: { return GLINT_KEY_KP_0 + 5; }  // KP_Begin
+    case 65432: { return GLINT_KEY_KP_0 + 6; }  // KP_Right
+    case 65429: { return GLINT_KEY_KP_0 + 7; }  // KP_Home
+    case 65431: { return GLINT_KEY_KP_0 + 8; }  // KP_Up
+    case 65434: { return GLINT_KEY_KP_0 + 9; }  // KP_Prior
+    case 65439: { return GLINT_KEY_KP_DECIMAL; }  // KP_Delete
+    case 65454: { return GLINT_KEY_KP_DECIMAL; }
+    case 65455: { return GLINT_KEY_KP_DIVIDE; }
+    case 65450: { return GLINT_KEY_KP_MULTIPLY; }
+    case 65453: { return GLINT_KEY_KP_SUBTRACT; }
+    case 65451: { return GLINT_KEY_KP_ADD; }
+    case 65509: { return GLINT_KEY_CAPS_LOCK; }
+    case 65300: { return GLINT_KEY_SCROLL_LOCK; }
+    case 65407: { return GLINT_KEY_NUM_LOCK; }
+    case 65377: { return GLINT_KEY_PRINT_SCREEN; }
+    case 65299: { return GLINT_KEY_PAUSE; }
+    case 65515: { return GLINT_KEY_LEFT_SUPER; }
+    case 65516: { return GLINT_KEY_RIGHT_SUPER; }
+    case 65383: { return GLINT_KEY_MENU; }
     case 65289: { return GLINT_KEY_TAB; }
     case 65288: { return GLINT_KEY_BACKSPACE; }
     case 65379: { return GLINT_KEY_INSERT; }

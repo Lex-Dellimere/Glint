@@ -263,11 +263,24 @@ fn text(pv: GlintPreview*, x: float32, y: float32, maxw: float32, maxlines: int3
   if (cols < 1) { cols = 1; }
   var line: int32 = 0;
   var col: int32 = 0;
+  var in_word: bool = false;
+  var wrapped: bool = false;       // this line began by wrapping, not at a newline
   for i in 0..n {
     var c: int32 = (int32)s[i];
-    if (c == 10) { line += 1; col = 0; }
+    if (c == 10) { line += 1; col = 0; in_word = false; wrapped = false; }
     else if (c != 13) {
-      if (col >= cols) { line += 1; col = 0; }
+      var space: bool = c == 32 || c == 9;
+      if (!space && !in_word) {
+        // a word starts: move it to the next line if it doesn't fit here
+        // (a word longer than a whole line still breaks where it must)
+        var w: int32 = 0;
+        var k: int64 = i;
+        while (k < n && s[k] != (uint8)32 && s[k] != (uint8)9 && s[k] != (uint8)10 && s[k] != (uint8)13) { w += 1; k += 1; }
+        if (col > 0 && col + w > cols && w <= cols) { line += 1; col = 0; wrapped = true; }
+      }
+      in_word = !space;
+      if (col >= cols) { line += 1; col = 0; wrapped = true; }
+      if (space && col == 0 && wrapped) { continue; }      // no space at the start of a wrapped line
       if (line >= maxlines) { return maxlines; }
       if (c == 9) { c = 32; }
       if (c < 32 || c > 126) { c = 63; }

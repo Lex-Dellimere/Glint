@@ -58,6 +58,10 @@ GL calls look the same as in C: `glClear(GL_COLOR_BUFFER_BIT)`, `glGenBuffers(1,
 
 Enums are `uint32` constants. Parameters that are `GLint` but take an enum (like `glTexParameteri`) need a cast: `(int32)GL_LINEAR`.
 
+## Windows and input
+
+Glint can open a simple window of its own (keys, mouse, resize, close), which is enough for tools, tests and demos. For a full app or game (typed text and input methods, cursors, pointer lock, fullscreen, HiDPI, clipboard, gamepads, Wayland), use the [`window`](https://github.com/Lex-Dellimere/window) library for the window and Glint for the GL context on it (`glint_open_existing`).
+
 ## Three kinds of context
 
 ```mettle

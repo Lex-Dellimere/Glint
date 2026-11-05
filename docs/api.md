@@ -56,7 +56,9 @@ while (glint_poll(ctx, &ev)) { ... }
 | `GLINT_EV_SCROLL` | `dy`: 1 up, -1 down. |
 | `GLINT_EV_FOCUS` | `x`: 1 gained, 0 lost. |
 
-Key codes: letters and digits are their upper-case ASCII codes (`'A'` = 65), space is 32, and named keys are `GLINT_KEY_ESCAPE`, `_ENTER`, `_TAB`, `_BACKSPACE`, `_INSERT`, `_DELETE`, `_LEFT`, `_RIGHT`, `_UP`, `_DOWN`, `_PAGE_UP`, `_PAGE_DOWN`, `_HOME`, `_END`, `_F1` (F1 to F12 are `GLINT_KEY_F1 + 0..11`), `_LEFT_SHIFT`, `_LEFT_CTRL`, `_LEFT_ALT` and the right-hand ones.
+Key codes name physical keys. Letters and digits are their upper-case ASCII codes (`'A'` = 65), space is 32, and other printable keys are the ASCII code of their unshifted symbol on a US layout (`';'` = 59, `'['` = 91). Named keys: `GLINT_KEY_ESCAPE`, `_ENTER`, `_TAB`, `_BACKSPACE`, `_INSERT`, `_DELETE`, `_LEFT`, `_RIGHT`, `_UP`, `_DOWN`, `_PAGE_UP`, `_PAGE_DOWN`, `_HOME`, `_END`, `_CAPS_LOCK`, `_SCROLL_LOCK`, `_NUM_LOCK`, `_PRINT_SCREEN`, `_PAUSE`, `_MENU`, `_F1` (F1 to F12 are `GLINT_KEY_F1 + 0..11`), the keypad (`GLINT_KEY_KP_0 + 0..9`, `_KP_DECIMAL`, `_KP_DIVIDE`, `_KP_MULTIPLY`, `_KP_SUBTRACT`, `_KP_ADD`, `_KP_ENTER`; the same codes with Num Lock on or off), and `_LEFT_SHIFT`, `_LEFT_CTRL`, `_LEFT_ALT`, `_LEFT_SUPER` with their right-hand ones.
+
+Glint's own window is kept simple: keys, mouse, scroll, resize, focus and close. For typed text (shifted symbols, dead keys, input methods), cursor shapes, pointer lock, fullscreen, HiDPI scale, the clipboard, drag and drop, gamepads or Wayland, make the window with the [`window`](https://github.com/Lex-Dellimere/window) library and give Glint its handle with `glint_open_existing`.
 
 State you can ask for at any time: `glint_key_down(ctx, key)`, `glint_mouse_down(ctx, button)`, `ctx->mouse_x`, `ctx->mouse_y`, `glint_should_close(ctx)`, `glint_set_should_close(ctx, bool)`.
 
